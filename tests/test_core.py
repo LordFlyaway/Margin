@@ -259,6 +259,11 @@ def _action(**k):
     ("set the volume to 40", "set_volume", 40), ("volume 25%", "set_volume", 25),
     ("make notes for module 3", None, None), ("what is a deadlock", None, None),
     ("play the next module notes", None, None), ("open the last module", None, None),
+    ("It's low Send the volume of the salt to 20.", "set_volume", 20), ("turn the volume to 60 please", "set_volume", 60),
+    ("change volume 15", "set_volume", 15),
+    ("mute the song", "music_mute", 0), ("Mute the soul", "music_mute", 0), ("mute", "music_mute", 0),
+    ("unmute the music", "music_unmute", 0), ("mute the mic", None, None),
+    ("increase the volume by a bit", "volume_up", 0), ("lower the music", "volume_down", 0),
 ])
 def test_quick_music_commands(text, name, value):
     from app import actions
@@ -308,6 +313,14 @@ def test_volume_and_music_actions(monkeypatch):
     assert actions.try_handle("turn the music down") == "Music volume is now 35%."
     monkeypatch.setattr(actions, "plan", lambda t: [_action(name="set_volume", value=80)])
     assert actions.try_handle("set volume to 80") == "Music volume is now 80%."
+    monkeypatch.setattr(actions, "plan", lambda t: [_action(name="music_mute")])
+    assert actions.try_handle("mute the song").startswith("Music muted") and level["v"] == 0
+    monkeypatch.setattr(actions, "plan", lambda t: [_action(name="music_unmute")])
+    assert actions.try_handle("unmute the music") == "Music unmuted, volume 80%."
+    monkeypatch.setattr(actions, "plan", lambda t: [_action(name="music_mute")])
+    actions.try_handle("mute the song")
+    monkeypatch.setattr(actions, "plan", lambda t: [_action(name="volume_up", value=5)])
+    assert actions.try_handle("turn it up a bit") == "Music volume is now 80%."  # back where it was, not 5%
     monkeypatch.setattr(music, "control", lambda a: False)
     monkeypatch.setattr(actions, "plan", lambda t: [_action(name="music_pause")])
     assert "Open Spotify" in actions.try_handle("pause the music")

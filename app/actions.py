@@ -17,11 +17,12 @@ STYLE_NAMES = {"detailed": "full notes", "summary": "a summary", "cheatsheet": "
 
 _COMMAND = re.compile(
     r"\b(make|create|generate|write|build|prepare|open|go to|take me|show me|play|pause|resume|stop|skip|next|previous|"
-    r"prev|volume|louder|quieter|softer|turn (it |the music )?(up|down)|plan|schedule|quiz|test me|flash ?cards?|"
+    r"prev|volume|louder|quieter|softer|mute|unmute|song|music|track|set|send|change|turn (it |the music )?(up|down)|plan|schedule|quiz|test me|flash ?cards?|"
     r"practice|notes|summar(y|ise|ize)|cheat ?sheet)\b", re.I)
 
 _NAMES = ["make_notes", "make_flashcards", "make_practice_exam", "plan_exam", "open_page",
-          "music_play", "music_pause", "music_next", "music_previous", "set_volume", "volume_up", "volume_down"]
+          "music_play", "music_pause", "music_next", "music_previous", "music_mute", "music_unmute",
+          "set_volume", "volume_up", "volume_down"]
 
 _SCHEMA = {
     "type": "object",
@@ -56,7 +57,9 @@ Actions:
 - plan_exam: build a revision plan. date is the exam date as YYYY-MM-DD.
 - open_page: page is one of today, library, notes, flashcards, practice, plan, music, settings.
 - music_play, music_pause, music_next, music_previous: control Spotify.
+- music_mute, music_unmute: silence the music or bring it back.
 - set_volume: value is the volume percent. volume_up, volume_down: value is how much (0 for the default).
+Messages come from speech recognition and may have misheard words: "volume of the salt to 20" means set_volume 20.
 
 subject is the exact subject name the request is about, or "" if none. documents lists exact document
 titles when the student names specific ones; leave it empty to mean every document in the subject.
@@ -78,10 +81,17 @@ def _catalog() -> str:
 
 _BLANK = {"subject": "", "documents": [], "style": "detailed", "count": 0, "value": 0, "page": "", "date": ""}
 _MUSIC = r"((the |this )?(music|song|track|spotify)|it|this)"
+_NOT_MIC = r"(?!.*\b(mic|microphone)\b)"
 _QUICK = [  # short music commands: exact rules beat a 7B model here, and they're instant
-    (re.compile(r"\b(set|change|put)\b.*\bvolume\b.*?\b(\d{1,3})\b|\bvolume\b.*?\b(\d{1,3})\s*(%|percent)?$", re.I), "set_volume"),
-    (re.compile(rf"\b(louder|volume up|turn (up )?the volume up|turn {_MUSIC} up|turn up (the )?{_MUSIC}|raise the volume)\b", re.I), "volume_up"),
-    (re.compile(rf"\b(quieter|softer|volume down|turn (down )?the volume( down)?|turn {_MUSIC} down|turn down (the )?{_MUSIC}|lower the volume)\b", re.I), "volume_down"),
+    # "volume ... to 20" whatever the middle says: speech-to-text often mishears "song" (as "salt", "soul")
+    (re.compile(r"\bvolume\b.*?\b(?:to|at)\s+(\d{1,3})\b|\b(?:set|change|put|turn|make|send)\b.*\bvolume\b\D*(\d{1,3})\b"
+                r"|\bvolume\s+(\d{1,3})\b", re.I), "set_volume"),
+    (re.compile(rf"^{_NOT_MIC}.*\bunmute\b", re.I), "music_unmute"),
+    (re.compile(rf"^{_NOT_MIC}.*\bmute\b", re.I), "music_mute"),
+    (re.compile(rf"\b(louder|volume up|turn (up )?the volume up|turn {_MUSIC} up|turn up (the )?{_MUSIC}"
+                r"|(raise|increase|boost|up) (the )?(volume|music|sound))\b", re.I), "volume_up"),
+    (re.compile(rf"\b(quieter|softer|volume down|turn (down )?the volume( down)?|turn {_MUSIC} down|turn down (the )?{_MUSIC}"
+                r"|(lower|decrease|reduce|drop) (the )?(volume|music|sound))\b", re.I), "volume_down"),
     (re.compile(r"\bnext (song|track|one)\b|\bskip( (this|the|it))?( (song|track))?\W*$", re.I), "music_next"),
     (re.compile(r"\b(previous|last) (song|track)\b|\bgo back a (song|track)\b|^(go back|previous)\W*$", re.I), "music_previous"),
     (re.compile(rf"\b(pause|stop)\b.*\b{_MUSIC}\b|^(pause|stop)( it)?\W*$", re.I), "music_pause"),
@@ -97,7 +107,7 @@ def quick(text: str) -> list[dict] | None:
         if m:
             value = 0
             if name == "set_volume":
-                value = int(next(g for g in (m.group(2), m.group(3)) if g))
+                value = int(next(g for g in m.groups() if g and g.isdigit()))
             return [{**_BLANK, "name": name, "value": value}]
     return None
 
@@ -231,12 +241,34 @@ def _music(action: str, said: str):
     return run
 
 
+_before_mute = {"level": None}
+
+
+def _mute(_a: dict) -> str:
+    current = music.get_volume()
+    if current is None:
+        return "Spotify isn't playing sound yet. Start a song first."
+    if current > 0:
+        _before_mute["level"] = current
+    music.set_volume(0)
+    return "Music muted. Say unmute to bring it back."
+
+
+def _unmute(_a: dict) -> str:
+    if music.get_volume() is None:
+        return "Spotify isn't playing sound yet. Start a song first."
+    level = music.set_volume(_before_mute["level"] or 50)
+    return f"Music unmuted, volume {level}%."
+
+
 def _volume(kind: str):
     def run(a: dict) -> str:
         current = music.get_volume()
         if current is None:
             return "Spotify isn't playing sound yet. Start a song first."
-        step = a["value"] if a["value"] > 0 else 15
+        step = a["value"] if 0 < a["value"] <= 50 else 15
+        if kind == "up" and current == 0 and _before_mute["level"]:
+            current = _before_mute["level"] - step  # turning up from mute picks up where the music was
         target = {"set": a["value"], "up": current + step, "down": current - step}[kind]
         level = music.set_volume(target)
         return f"Music volume is now {level}%."
@@ -249,6 +281,7 @@ HANDLERS = {
     "music_play": _music("play", "Playing."), "music_pause": _music("pause", "Paused."),
     "music_next": _music("next", "Skipping to the next song."),
     "music_previous": _music("previous", "Going back a song."),
+    "music_mute": _mute, "music_unmute": _unmute,
     "set_volume": _volume("set"), "volume_up": _volume("up"), "volume_down": _volume("down"),
 }
 
