@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Margin</title>
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell">
+  <nav class="rail" aria-label="Sections">
+    <div class="brand">Margin</div>
+    <a href="#today">Today</a>
+    <a href="#library">Library</a>
+    <a href="#notes">Notes</a>
+    <a href="#cards">Flashcards <span class="count" id="due-count" hidden></span></a>
+    <a href="#practice">Practice exams</a>
+    <a href="#plan">Exam plan</a>
+    <a href="#music">Music</a>
+    <section class="mini" id="mini" aria-label="Spotify player" hidden>
+      <img class="mini-art" id="mini-art" alt="">
+      <div class="mini-title" id="mini-title"></div>
+      <div class="mini-artist" id="mini-artist"></div>
+      <div class="mini-bar" role="progressbar" aria-label="Song progress" id="mini-bar"><span id="mini-fill"></span></div>
+      <div class="mini-times"><span id="mini-pos">0:00</span><span id="mini-len">0:00</span></div>
+      <div class="mini-controls">
+        <button type="button" data-mini="previous" aria-label="Previous song"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
+        <button type="button" data-mini="toggle" class="mini-play" id="mini-play" aria-label="Play"><svg viewBox="0 0 24 24" aria-hidden="true"><path id="mini-icon" d="M8 5v14l11-7z"/></svg></button>
+        <button type="button" data-mini="next" aria-label="Next song"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg></button>
+      </div>
+      <label class="mini-volume" id="mini-volume-row" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4zM16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M4 9h4l5-4v14l-5-4H4z"/></svg>
+        <input type="range" min="0" max="100" step="1" id="mini-volume" aria-label="Music volume">
+      </label>
+    </section>
+    <a href="#settings" class="rail-end">Settings</a>
+  </nav>
+
+  <main class="page" id="view" tabindex="-1"></main>
+
+  <aside class="margin" aria-label="Assistant">
+    <header class="margin-head">
+      <div class="status-row">
+        <span class="dot" id="voice-dot" data-state="off"></span>
+        <span class="hand" id="voice-text">voice is starting</span>
+        <button class="ghost small" id="talk" type="button">Talk</button>
+        <button class="ghost small" id="mute" type="button">Mute</button>
+      </div>
+      <label class="focus">Search in
+        <select id="focus"></select>
+      </label>
+      <label class="focus">Answer with
+        <select id="brain"><option value="ollama">Local model</option><option value="claude">Claude</option></select>
+      </label>
+    </header>
+    <div class="thread" id="thread" aria-live="polite"></div>
+    <div class="player" id="player" hidden></div>
+    <form class="ask" id="ask">
+      <textarea id="ask-text" rows="2" placeholder="Ask about your notes" aria-label="Ask about your notes"></textarea>
+      <button class="primary" type="submit">Ask</button>
+    </form>
+  </aside>
+</div>
+<div class="drawer" id="drawer" hidden>
+  <button class="ghost small" id="drawer-close" type="button">Close</button>
+  <div id="drawer-body"></div>
+</div>
+<div class="toasts" id="toasts" role="status"></div>
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/purify.min.js"></script>
+<script src="vendor/katex/katex.min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
