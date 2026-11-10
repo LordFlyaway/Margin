@@ -244,6 +244,84 @@ def test_music_add_open_and_duplicates(client, monkeypatch):
     assert opened == ["spotify:playlist:37i9dQZF1DX8Uebhn9wzrS"]
 
 
+def _action(**k):
+    return {"name": "make_notes", "subject": "", "documents": [], "style": "detailed", "count": 0, "value": 0,
+            "page": "", "date": "", **k}
+
+
+@pytest.mark.parametrize("text,name,value", [
+    ("pause the music", "music_pause", 0), ("pause", "music_pause", 0), ("stop the song", "music_pause", 0),
+    ("play the music", "music_play", 0), ("resume", "music_play", 0),
+    ("skip this song", "music_next", 0), ("next track", "music_next", 0), ("skip", "music_next", 0),
+    ("go back a song", "music_previous", 0), ("previous song", "music_previous", 0),
+    ("turn the music down a bit", "volume_down", 0), ("make it quieter", "volume_down", 0),
+    ("turn the volume up", "volume_up", 0), ("louder", "volume_up", 0),
+    ("set the volume to 40", "set_volume", 40), ("volume 25%", "set_volume", 25),
+    ("make notes for module 3", None, None), ("what is a deadlock", None, None),
+    ("play the next module notes", None, None), ("open the last module", None, None),
+])
+def test_quick_music_commands(text, name, value):
+    from app import actions
+    got = actions.quick(text)
+    assert (got[0]["name"], got[0]["value"]) == (name, value) if name else got is None
+
+
+def test_questions_skip_the_action_planner(monkeypatch):
+    from app import actions
+    monkeypatch.setattr(actions, "plan", lambda t: (_ for _ in ()).throw(AssertionError("planner called")))
+    assert actions.try_handle("what is a deadlock?") is None
+
+
+def test_make_notes_for_a_whole_subject_skips_existing(client, monkeypatch):
+    from app import actions
+    cid, d1 = _ready_doc(client, "Actions OS", ["paging"])
+    d2 = db.run("INSERT INTO documents(course_id,title,filename,path,status) VALUES(?,?,?,?,'ready')", cid, "Module 2", "m2", "x")
+    db.run("UPDATE documents SET title='Module 1' WHERE id=?", d1)
+    db.run("INSERT INTO notes(course_id,document_id,title,style,status) VALUES(?,?,?,?,'ready')", cid, d2, "Notes: Module 2", "detailed")
+    started = []
+    monkeypatch.setattr(study, "start_notes", lambda doc, style: started.append((doc, style)))
+    monkeypatch.setattr(actions, "plan", lambda t: [_action(subject="actions os")])
+    reply = actions.try_handle("make notes for every Actions OS module")
+    assert started == [(d1, "detailed")]
+    assert "Module 1" in reply and "Module 2 already has full notes" in reply
+
+
+def test_named_documents_and_unknown_subject(client, monkeypatch):
+    from app import actions
+    cid, d1 = _ready_doc(client, "Pick OS", ["x"])
+    db.run("UPDATE documents SET title='Module 3' WHERE id=?", d1)
+    started = []
+    monkeypatch.setattr(study, "start_cards", lambda doc, n: started.append((doc, n)))
+    monkeypatch.setattr(actions, "plan", lambda t: [_action(name="make_flashcards", subject="Pick OS", documents=["module 3"])])
+    assert "20 flashcards" in actions.try_handle("make flashcards for module 3 of pick os")
+    assert started == [(d1, 20)]
+    monkeypatch.setattr(actions, "plan", lambda t: [_action(subject="Biology")])
+    assert "couldn't find a subject called Biology" in actions.try_handle("make notes for biology")
+
+
+def test_volume_and_music_actions(monkeypatch):
+    from app import actions, music
+    level = {"v": 50}
+    monkeypatch.setattr(music, "get_volume", lambda: level["v"])
+    monkeypatch.setattr(music, "set_volume", lambda v: level.update(v=max(0, min(100, v))) or level["v"])
+    monkeypatch.setattr(actions, "plan", lambda t: [_action(name="volume_down")])
+    assert actions.try_handle("turn the music down") == "Music volume is now 35%."
+    monkeypatch.setattr(actions, "plan", lambda t: [_action(name="set_volume", value=80)])
+    assert actions.try_handle("set volume to 80") == "Music volume is now 80%."
+    monkeypatch.setattr(music, "control", lambda a: False)
+    monkeypatch.setattr(actions, "plan", lambda t: [_action(name="music_pause")])
+    assert "Open Spotify" in actions.try_handle("pause the music")
+
+
+def test_instruction_reply_goes_through_chat(client, monkeypatch):
+    from app import actions, assistant
+    monkeypatch.setattr(actions, "try_handle", lambda t: "Paused.")
+    spoken = []
+    result = assistant.ask("pause the music", "voice", spoken.append)
+    assert result["content"] == "Paused." and spoken == ["Paused."]
+    assert db.one("SELECT content FROM messages WHERE id=?", result["id"])["content"] == "Paused."
+
+
 def test_volume_endpoint(client, monkeypatch):
     from app import music
     set_to = []

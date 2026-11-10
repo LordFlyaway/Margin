@@ -669,6 +669,7 @@ function onEvent(ev) {
   switch (ev.type) {
     case "ws.open": refreshFocus(); loadThread(); break;
     case "toast": toast(ev.message, ev.tone); break;
+    case "navigate": location.hash = ev.page; break;
     case "voice.state": showVoice(ev); break;
     case "changed":
       if (ev.what === "courses" || ev.what === "settings") refreshFocus();

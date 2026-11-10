@@ -89,6 +89,17 @@ The panel on the right is always available.
 
 - Type a question and press Enter, or say **"hey Jarvis"** and then your question. It answers out loud, and you have 4 seconds to ask a follow-up without saying the wake word again.
 - **Talk** starts listening without the wake word. **Mute** turns the microphone off.
+- It can also do things for you. Type or say instructions like these:
+
+  | Say | What happens |
+  |---|---|
+  | "Make notes for every Operating Systems module" | Writes full notes for each document in that subject, skipping any that already have them |
+  | "Make a cheat sheet for module 3 of OS" | Writes a cheat sheet for that one document |
+  | "Make 15 flashcards for Cloud Arch module 6" | Creates flashcards |
+  | "Quiz me on Operating Systems module 2" | Writes a practice exam |
+  | "My Cloud Arch exam is on 28 November, make me a plan" | Builds a revision plan |
+  | "Open my flashcards" | Opens that page |
+  | "Pause the music", "skip this song", "turn it down", "set the volume to 40" | Controls Spotify |
 - **Search in** limits answers to one subject. **Answer with** switches between the local model and Claude.
 - Click a page citation like **p. 12** to see the source text, then **Open the document here** to jump to it.
 

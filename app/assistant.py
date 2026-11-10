@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Callable
 
-from . import config, db, events, llm, retrieval
+from . import actions, config, db, events, llm, retrieval
 
 _BASE = """You are Margin, a sharp, friendly study assistant helping a university student clear doubts.
 Excerpts from the student's own notes are given with each question. Base your answer on them when they are relevant.
@@ -28,6 +28,19 @@ def ask(text: str, via: str = "text", on_delta: Callable[[str], None] | None = N
     history = list(reversed(db.q("SELECT role,content FROM messages ORDER BY id DESC LIMIT 8")))
     user_id = db.run("INSERT INTO messages(role,content,via) VALUES('user',?,?)", text, via)
     events.publish({"type": "chat.user", "id": user_id, "content": text, "via": via})
+
+    with llm.question():
+        done = actions.try_handle(text)
+    if done is not None:  # it was an instruction, and it has been carried out
+        reply_id = db.run("INSERT INTO messages(role,content,via) VALUES('assistant',?,?)", done, via)
+        events.publish({"type": "chat.start", "id": reply_id, "via": via, "sources": []})
+        events.publish({"type": "chat.done", "id": reply_id, "content": done, "error": None, "sources": []})
+        if on_delta:
+            try:
+                on_delta(done)
+            except Cancelled:
+                pass
+        return {"id": reply_id, "content": done, "sources": [], "error": None}
 
     hits = retrieval.search(text, settings["focus_course_id"])
     sources = [{"document_id": h["document_id"], "title": h["title"], "page": h["page"]} for h in hits]
