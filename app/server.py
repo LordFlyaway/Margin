@@ -509,8 +509,8 @@ def music_now():
 
 
 @app.get("/api/music/art")
-def music_art():
-    art = music.album_art()
+def music_art(k: str | None = None):
+    art = music.album_art(k)
     if art is None:
         raise HTTPException(404, "No album art right now.")
     data, content_type = art

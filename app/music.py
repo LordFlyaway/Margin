@@ -12,6 +12,27 @@ from datetime import datetime, timezone
 
 import httpx
 
+from concurrent.futures import ThreadPoolExecutor
+
+
+def _init_media_thread() -> None:
+    # Windows media and mixer calls share one thread, set up for multithreaded COM.
+    # Mixing apartment types on server threads made cover-art reads hang.
+    import sys
+    sys.coinit_flags = 0  # COINIT_MULTITHREADED; comtypes reads this when first imported
+    import comtypes
+    try:
+        comtypes.CoInitializeEx(comtypes.COINIT_MULTITHREADED)
+    except OSError:
+        pass  # this thread is already set up
+
+
+_media = ThreadPoolExecutor(max_workers=1, thread_name_prefix="margin-media", initializer=_init_media_thread)
+
+
+def _on_media_thread(fn):
+    return _media.submit(fn).result(timeout=10)
+
 _LINK = re.compile(
     r"(?:open\.spotify\.com/(?:intl-[a-z]+/)?|spotify:)(track|album|playlist|artist|episode|show)[/:]([A-Za-z0-9]{10,40})")
 _THUMBNAIL = re.compile(r"^https://[a-z0-9.-]*(?:scdn\.co|spotifycdn\.com)/")
@@ -84,11 +105,21 @@ async def _art() -> tuple[bytes, str] | None:
     return bytes(reader.read_buffer(stream.size)), stream.content_type or "image/png"
 
 
-def album_art() -> tuple[bytes, str] | None:
+_art_cache: dict = {}
+
+
+def album_art(key: str | None = None) -> tuple[bytes, str] | None:
+    """Cover of the current song. Read once per song, then served from memory."""
+    if key and key in _art_cache:
+        return _art_cache[key]
     try:
-        return asyncio.run(_art())
+        art = _on_media_thread(lambda: asyncio.run(asyncio.wait_for(_art(), 5)))
     except Exception:
         return None
+    if art and key:
+        _art_cache.clear()  # only the current song's cover is worth keeping
+        _art_cache[key] = art
+    return art
 
 
 async def _control(action: str) -> bool:
@@ -101,10 +132,8 @@ async def _control(action: str) -> bool:
 
 
 def _spotify_volumes() -> list:
-    """Spotify's channels in the Windows volume mixer (it can have several)."""
-    import comtypes
+    """Spotify's channels in the Windows volume mixer (it can have several). Call on the media thread."""
     from pycaw.pycaw import AudioUtilities
-    comtypes.CoInitialize()  # each server thread needs COM set up
     found = []
     for s in AudioUtilities.GetAllSessions():
         try:  # sessions from closed apps linger and raise when asked their name
@@ -115,10 +144,14 @@ def _spotify_volumes() -> list:
     return found
 
 
+def _get_volume() -> int | None:
+    volumes = _spotify_volumes()
+    return round(max(v.GetMasterVolume() for v in volumes) * 100) if volumes else None
+
+
 def get_volume() -> int | None:
     try:
-        volumes = _spotify_volumes()
-        return round(max(v.GetMasterVolume() for v in volumes) * 100) if volumes else None
+        return _on_media_thread(_get_volume)
     except Exception:
         return None
 
@@ -126,23 +159,30 @@ def get_volume() -> int | None:
 def set_volume(percent: int) -> int | None:
     """Set Spotify's level in the Windows mixer. Returns the new level, or None if Spotify has no audio channel."""
     level = min(100, max(0, int(percent)))
-    volumes = _spotify_volumes()
-    for v in volumes:
-        v.SetMasterVolume(level / 100, None)
-        if level and v.GetMute():
-            v.SetMute(0, None)
-    return level if volumes else None
+
+    def apply():
+        volumes = _spotify_volumes()
+        for v in volumes:
+            v.SetMasterVolume(level / 100, None)
+            if level and v.GetMute():
+                v.SetMute(0, None)
+        return level if volumes else None
+
+    return _on_media_thread(apply)
 
 
 def now_playing() -> dict:
+    def read():
+        now = asyncio.run(asyncio.wait_for(_now(), 5))
+        if now["available"]:
+            now["volume"] = _get_volume()
+        return now
+
     try:
-        now = asyncio.run(_now())
+        return _on_media_thread(read)
     except Exception:
         return {"available": False}
-    if now["available"]:
-        now["volume"] = get_volume()
-    return now
 
 
 def control(action: str) -> bool:
-    return asyncio.run(_control(action))
+    return _on_media_thread(lambda: asyncio.run(asyncio.wait_for(_control(action), 5)))
