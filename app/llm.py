@@ -1,4 +1,4 @@
-"""One interface over Claude and local Ollama. Everything else calls these functions."""
+"""One interface over Claude, ChatGPT (OpenAI) and local Ollama. Everything else calls these functions."""
 from __future__ import annotations
 
 import json
@@ -12,11 +12,13 @@ import httpx
 from . import config
 
 OLLAMA = "http://127.0.0.1:11434"
+OPENAI = "https://api.openai.com/v1"
 _FALLBACK_MODELS = {"claude-opus-5-5", "claude-sonnet-5-5"}
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 # Roughly how much source text fits in one request (characters).
 _CLAUDE_SECTION = 600_000
+_OPENAI_SECTION = 300_000
 _OLLAMA_SECTION = 12_000
 _OCR_MAX_TOKENS = 1500  # vision models can loop forever on a busy slide
 
@@ -30,7 +32,12 @@ def provider() -> str:
 
 
 def section_limit() -> int:
-    return _CLAUDE_SECTION if provider() == "claude" else _OLLAMA_SECTION
+    return {"claude": _CLAUDE_SECTION, "openai": _OPENAI_SECTION}.get(provider(), _OLLAMA_SECTION)
+
+
+def sees_images() -> bool:
+    """Whether the thinking model can look at pictures itself (the local one can't)."""
+    return provider() in ("claude", "openai")
 
 
 def _user_message(prompt: str, images: list[str] | None) -> dict:
@@ -83,8 +90,11 @@ def yield_to_questions() -> None:
 def stream(messages: list[dict], system: str, effort: str = "medium", schema: dict | None = None,
            read_timeout: float = 600) -> Iterator[str]:
     """Yield text as it is generated. messages: [{role, content, images?}]"""
-    if provider() == "claude":
+    p = provider()
+    if p == "claude":
         yield from _claude_stream(messages, system, effort, schema)
+    elif p == "openai":
+        yield from _openai_stream(messages, system, effort, schema, read_timeout=read_timeout)
     else:
         yield from _ollama_stream(messages, system, schema, read_timeout=read_timeout)
 
@@ -179,6 +189,100 @@ def _claude_stream(messages, system, effort, schema, model: str | None = None) -
         raise LLMError("Claude declined to answer this request.")
     if final.stop_reason == "max_tokens":
         raise LLMError("The answer was too long and got cut off. Try a smaller document.")
+
+
+# ---- ChatGPT (OpenAI) ---------------------------------------------------
+
+def _openai_content(m: dict):
+    if not m.get("images"):
+        return m["content"]
+    return [{"type": "text", "text": m["content"]}] + [
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b}"}} for b in m["images"]]
+
+
+def _openai_error(status: int, text: str, model: str) -> LLMError:
+    try:
+        err = json.loads(text).get("error") or {}
+    except ValueError:
+        err = {}
+    message, code = err.get("message") or text[:200], (err.get("code") or err.get("type") or "")
+    if status == 401:
+        return LLMError("OpenAI rejected the API key. Check it in Settings.")
+    if status == 429 and "quota" in (code + message).lower():
+        return LLMError("Your OpenAI account is out of credit. Add some at platform.openai.com, or switch model in Settings.")
+    if status == 429:
+        return LLMError("OpenAI's rate limit was reached. Wait a minute and try again.")
+    if status == 404 or code == "model_not_found":
+        return LLMError(f"OpenAI doesn't offer the model {model} to this key. Pick another in Settings.")
+    if status >= 500:
+        return LLMError(f"OpenAI had a server problem ({status}). Try again shortly.")
+    return LLMError(f"ChatGPT couldn't process this request: {message}")
+
+
+def _openai_stream(messages, system, effort, schema, read_timeout: float = 600) -> Iterator[str]:
+    key = config.openai_key()
+    if not key:
+        raise LLMError("Add your OpenAI API key in Settings, or switch to Local.")
+    model = config.load_settings()["openai_model"]
+    body: dict = {
+        "model": model, "stream": True,
+        "messages": [{"role": "system", "content": system}] +
+                    [{"role": m["role"], "content": _openai_content(m)} for m in messages],
+    }
+    if schema:
+        body["response_format"] = {"type": "json_schema",
+                                   "json_schema": {"name": "result", "schema": schema, "strict": False}}
+    if model.startswith(("gpt-5", "o")):  # reasoning models: trade speed for depth like Claude's effort
+        body["reasoning_effort"] = effort if effort in ("low", "medium", "high") else "medium"
+    headers = {"Authorization": f"Bearer {key}"}
+    for attempt in range(2):
+        try:
+            with httpx.stream("POST", f"{OPENAI}/chat/completions", json=body, headers=headers,
+                              timeout=httpx.Timeout(read_timeout, connect=10)) as r:
+                if r.status_code != 200:
+                    r.read()
+                    if attempt == 0 and r.status_code == 400 and "reasoning_effort" in r.text and "reasoning_effort" in body:
+                        body.pop("reasoning_effort")  # this model doesn't take it; ask again without
+                        continue
+                    raise _openai_error(r.status_code, r.text, model)
+                finish = None
+                for line in r.iter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    for choice in chunk.get("choices") or []:
+                        piece = (choice.get("delta") or {}).get("content")
+                        if piece:
+                            yield piece
+                        finish = choice.get("finish_reason") or finish
+                if finish == "length":
+                    raise LLMError("The answer was too long and got cut off. Try a smaller document.")
+                if finish == "content_filter":
+                    raise LLMError("ChatGPT declined to answer this request.")
+                return
+        except httpx.ConnectError as e:
+            raise LLMError("Can't reach OpenAI. Check your internet, or switch to Local in Settings.") from e
+        except httpx.TimeoutException as e:
+            raise LLMError("ChatGPT took too long to answer. Try again.") from e
+
+
+def openai_models() -> list[str]:
+    """Chat models this key can use, newest names first. Empty when there's no key or no internet."""
+    key = config.openai_key()
+    if not key:
+        return []
+    try:
+        r = httpx.get(f"{OPENAI}/models", headers={"Authorization": f"Bearer {key}"}, timeout=8)
+        r.raise_for_status()
+        ids = [m["id"] for m in r.json().get("data", [])]
+    except (httpx.HTTPError, ValueError, KeyError):
+        return []
+    skip = ("audio", "realtime", "tts", "transcribe", "search", "image", "embedding", "instruct", "moderation")
+    chat = [i for i in ids if i.startswith(("gpt-", "o1", "o3", "o4", "chatgpt")) and not any(w in i for w in skip)]
+    return sorted(chat, reverse=True)
 
 
 # ---- Ollama -------------------------------------------------------------

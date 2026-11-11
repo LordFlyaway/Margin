@@ -1,4 +1,4 @@
-// Helpers shared by the main window and the voice popup.
+// Helpers for the main window.
 
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

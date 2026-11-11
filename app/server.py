@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import date
@@ -70,6 +71,8 @@ def state():
         "settings": config.load_settings(),
         "claude_configured": config.claude_configured(),
         "claude_models": config.CLAUDE_MODELS,
+        "openai_configured": config.configured("openai"),
+        "openai_models": config.OPENAI_MODELS,
         "ollama": llm.ollama_status(),
         "voice": voice.status(),
         "start_with_windows": startup.enabled(),
@@ -80,7 +83,9 @@ def state():
 def put_settings(patch: dict = Body(...)):
     if "claude" in (patch.get("provider"), patch.get("ocr_provider")) and not config.claude_configured():
         raise HTTPException(400, "Add your Claude API key first.")
-    if patch.get("provider") not in (None, "claude", "ollama"):
+    if patch.get("provider") == "openai" and not config.configured("openai"):
+        raise HTTPException(400, "Add your OpenAI API key first.")
+    if patch.get("provider") not in (None, "claude", "openai", "ollama"):
         raise HTTPException(400, "Unknown AI provider.")
     if "start_with_windows" in patch:
         startup.set_enabled(bool(patch.pop("start_with_windows")))
@@ -107,6 +112,27 @@ def delete_key():
         config.save_settings({"provider": "ollama", "ocr_provider": "ollama"})
     events.changed("settings")
     return {"ok": True}
+
+
+@app.put("/api/settings/openai-key")
+def put_openai_key(body: KeyIn):
+    config.set_key("openai", body.key.strip())
+    events.changed("settings")
+    return {"ok": True}
+
+
+@app.delete("/api/settings/openai-key")
+def delete_openai_key():
+    config.set_key("openai", None)
+    if not config.configured("openai") and config.load_settings()["provider"] == "openai":
+        config.save_settings({"provider": "ollama"})
+    events.changed("settings")
+    return {"ok": True}
+
+
+@app.get("/api/openai/models")
+def openai_models():
+    return {"models": llm.openai_models()}
 
 
 # ---- Courses and documents ----------------------------------------------
@@ -453,23 +479,63 @@ def today():
 
 # ---- Assistant ----------------------------------------------------------
 
+ATTACHMENTS = config.DATA / "attachments"
+_ATTACH_TYPES = ingest.SUPPORTED | {".gif", ".bmp"}
+_ATTACH_MAX = 25 * 1024 * 1024
+_ATTACH_FILES = 6
+
+
 @app.get("/api/chat")
 def chat():
     rows = list(reversed(db.q("SELECT * FROM messages ORDER BY id DESC LIMIT 60")))
     for r in rows:
         r["sources"] = json.loads(r["sources"])
+        r["attachments"] = json.loads(r.get("attachments") or "[]")
     return rows
 
 
 @app.post("/api/chat")
-def send(text: str = Body(..., embed=True, min_length=1)):
-    events.chat_pool.submit(assistant.ask, text)
+async def send(request: Request):
+    """JSON {text}, or a form with text and up to six attached files or pictures."""
+    if request.headers.get("content-type", "").startswith("multipart/"):
+        form = await request.form()
+        text = str(form.get("text") or "")
+        uploads = [f for f in form.getlist("files") if hasattr(f, "filename") and f.filename]
+    else:
+        text, uploads = str((await request.json()).get("text") or ""), []
+    if not text.strip() and not uploads:
+        raise HTTPException(400, "Type a message or attach a file.")
+    if len(uploads) > _ATTACH_FILES:
+        raise HTTPException(400, f"Attach up to {_ATTACH_FILES} files at a time.")
+    ATTACHMENTS.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for f in uploads:
+        ext = Path(f.filename).suffix.lower()
+        if ext not in _ATTACH_TYPES:
+            raise HTTPException(400, f"{f.filename}: Margin can read PDF, Word, PowerPoint, text and picture files.")
+        data = await f.read()
+        if len(data) > _ATTACH_MAX:
+            raise HTTPException(400, f"{f.filename} is over 25 MB.")
+        file = f"{uuid.uuid4().hex}{ext}"
+        (ATTACHMENTS / file).write_bytes(data)
+        saved.append({"name": Path(f.filename).name[:120], "file": file, "path": str(ATTACHMENTS / file)})
+    events.chat_pool.submit(assistant.ask, text, "text", None, saved)
     return {"ok": True}
+
+
+@app.get("/api/attachments/{file}")
+def attachment(file: str):
+    path = ATTACHMENTS / Path(file).name
+    if not re.fullmatch(r"[0-9a-f]{32}\.[a-z]{2,4}", file) or not path.exists():
+        raise HTTPException(404, "That attachment no longer exists.")
+    return FileResponse(path)
 
 
 @app.delete("/api/chat")
 def clear_chat():
     db.run("DELETE FROM messages")
+    for f in ATTACHMENTS.glob("*") if ATTACHMENTS.exists() else []:
+        f.unlink(missing_ok=True)
     events.changed("chat")
     return {"ok": True}
 

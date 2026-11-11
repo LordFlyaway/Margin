@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS papers(
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL,
   sources TEXT NOT NULL DEFAULT '[]', via TEXT NOT NULL DEFAULT 'text',
+  attachments TEXT NOT NULL DEFAULT '[]',
   created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 """
 
@@ -115,6 +116,8 @@ def init() -> None:
         run("ALTER TABLE tasks ADD COLUMN done_at TEXT")
     if "kind" not in {r["name"] for r in q("PRAGMA table_info(documents)")}:
         run("ALTER TABLE documents ADD COLUMN kind TEXT NOT NULL DEFAULT 'notes'")  # 'notes' | 'paper'
+    if "attachments" not in {r["name"] for r in q("PRAGMA table_info(messages)")}:
+        run("ALTER TABLE messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
     # Anything still "in progress" was cut off by the app closing.
     # Documents are excluded: ingest.resume_unfinished picks those back up.
     run("UPDATE notes SET status='failed' WHERE status='writing'")

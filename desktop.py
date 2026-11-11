@@ -1,4 +1,4 @@
-"""Margin desktop shell: main window, always-on-top voice popup and tray icon."""
+"""Margin desktop shell: main window and tray icon."""
 from __future__ import annotations
 
 import os
@@ -18,8 +18,6 @@ from app.server import app
 from app.voice.engine import engine as voice
 
 URL = f"http://{config.HOST}:{config.PORT}"
-_ACTIVE = {"listening", "thinking", "speaking"}
-_POPUP_W, _POPUP_H = 420, 230
 
 
 def port_taken() -> bool:
@@ -50,10 +48,7 @@ def tray_image() -> Image.Image:
 class Shell:
     def __init__(self, start_hidden: bool):
         self.quitting = False
-        self._hide_timer: threading.Timer | None = None
         self.main = webview.create_window("Margin", URL, width=1380, height=880, min_size=(980, 640), hidden=start_hidden)
-        self.popup = webview.create_window("Margin assistant", f"{URL}/overlay.html", width=_POPUP_W, height=_POPUP_H,
-                                           frameless=True, on_top=True, hidden=True, focus=False, easy_drag=True)
         self.main.events.closing += self.on_close
         self.tray = pystray.Icon("margin", tray_image(), "Margin", pystray.Menu(
             pystray.MenuItem("Open Margin", self.show_main, default=True),
@@ -82,29 +77,12 @@ class Shell:
         self.quitting = True
         voice.stop()
         self.tray.stop()
-        for window in (self.popup, self.main):
-            window.destroy()
+        self.main.destroy()
 
     def on_event(self, event: dict):
+        # "hey Jarvis" shows its state in the assistant panel and answers aloud: no extra window.
         if event.get("type") == "window.show":
             self.show_main()
-            return
-        if event.get("type") != "voice.state":
-            return
-        if self._hide_timer:
-            self._hide_timer.cancel()
-            self._hide_timer = None
-        if event["state"] in _ACTIVE:
-            self.place_popup()
-            self.popup.show()
-        else:
-            self._hide_timer = threading.Timer(2.5, self.popup.hide)
-            self._hide_timer.daemon = True
-            self._hide_timer.start()
-
-    def place_popup(self):
-        screen = webview.screens[0]
-        self.popup.move(screen.width - _POPUP_W - 24, screen.height - _POPUP_H - 72)
 
     def started(self):
         self.tray.run_detached()

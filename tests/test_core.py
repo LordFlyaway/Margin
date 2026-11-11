@@ -615,3 +615,95 @@ def test_claude_needs_key(client, monkeypatch):
     from app import config
     monkeypatch.setattr(config, "claude_configured", lambda: False)
     assert client.put("/api/settings", json={"provider": "claude"}).status_code == 400
+
+
+def test_openai_needs_key(client, monkeypatch):
+    from app import config
+    monkeypatch.setattr(config, "configured", lambda p: p != "openai")
+    assert client.put("/api/settings", json={"provider": "openai"}).status_code == 400
+
+
+class _FakeResponse:
+    def __init__(self, status, lines=(), text=""):
+        self.status_code, self._lines, self.text = status, lines, text
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self.text
+
+    def iter_lines(self):
+        return iter(self._lines)
+
+
+def test_openai_stream_reads_chunks_and_drops_unsupported_effort(monkeypatch):
+    import json as _json
+    from app import config
+    monkeypatch.setattr(config, "openai_key", lambda: "sk-test")
+    monkeypatch.setattr(config, "load_settings", lambda: {**config.DEFAULTS, "provider": "openai", "openai_model": "gpt-5-mini"})
+    sent = []
+    chunk = lambda t, f=None: "data: " + _json.dumps({"choices": [{"delta": {"content": t}, "finish_reason": f}]})
+
+    def fake_stream(method, url, json, headers, timeout):
+        sent.append(dict(json))
+        if len(sent) == 1:
+            return _FakeResponse(400, text='{"error":{"message":"Unsupported parameter: reasoning_effort"}}')
+        return _FakeResponse(200, ["", chunk("Round "), chunk("robin", "stop"), "data: [DONE]"])
+    monkeypatch.setattr(llm.httpx, "stream", fake_stream)
+    out = "".join(llm.stream([{"role": "user", "content": "hi", "images": ["AAAA"]}], "sys", "low"))
+    assert out == "Round robin"
+    assert "reasoning_effort" in sent[0] and "reasoning_effort" not in sent[1]
+    user = sent[1]["messages"][1]["content"]
+    assert user[0] == {"type": "text", "text": "hi"} and user[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def test_openai_errors_are_friendly(monkeypatch):
+    from app import config
+    monkeypatch.setattr(config, "openai_key", lambda: "sk-test")
+    monkeypatch.setattr(config, "load_settings", lambda: {**config.DEFAULTS, "provider": "openai"})
+    monkeypatch.setattr(llm.httpx, "stream", lambda *a, **k: _FakeResponse(429, text='{"error":{"code":"insufficient_quota","message":"quota"}}'))
+    with pytest.raises(llm.LLMError, match="out of credit"):
+        "".join(llm.stream([{"role": "user", "content": "hi"}], "sys"))
+
+
+def _chat_with_files(client, monkeypatch, sees):
+    from app import retrieval as _r
+    seen = {}
+    monkeypatch.setattr(_r, "search", lambda *a, **k: [])
+    monkeypatch.setattr(llm, "sees_images", lambda: sees)
+    monkeypatch.setattr(llm, "read_image", lambda *a: "a graph of page faults")
+
+    def fake_stream(messages, system, effort="medium", schema=None, read_timeout=600):
+        seen["message"] = messages[-1]
+        yield "Here's what your file says."
+    monkeypatch.setattr(llm, "stream", fake_stream)
+    client.delete("/api/chat")
+    r = client.post("/api/chat", data={"text": "explain these"}, files=[
+        ("files", ("chart.png", _png(), "image/png")),
+        ("files", ("notes.txt", b"FIFO evicts the oldest page.", "text/plain"))])
+    assert r.status_code == 200
+    _wait(lambda: db.one("SELECT content FROM messages WHERE role='assistant' AND content<>''"))
+    return seen["message"]
+
+
+def test_chat_attachments_reach_a_model_that_sees(client, monkeypatch):
+    message = _chat_with_files(client, monkeypatch, sees=True)
+    assert len(message["images"]) == 1 and "FIFO evicts the oldest page." in message["content"]
+    user = [m for m in client.get("/api/chat").json() if m["role"] == "user"][-1]
+    assert [a["name"] for a in user["attachments"]] == ["chart.png", "notes.txt"] and user["attachments"][0]["image"]
+    assert client.get(f"/api/attachments/{user['attachments'][0]['file']}").status_code == 200
+    assert client.get("/api/attachments/..%2Fmargin.db").status_code == 404
+
+
+def test_chat_attachments_are_read_for_the_local_model(client, monkeypatch):
+    message = _chat_with_files(client, monkeypatch, sees=False)
+    assert not message["images"] and "a graph of page faults" in message["content"]
+
+
+def test_chat_rejects_unknown_file_types(client):
+    r = client.post("/api/chat", data={"text": "hi"}, files=[("files", ("virus.exe", b"MZ", "application/octet-stream"))])
+    assert r.status_code == 400

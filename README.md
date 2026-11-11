@@ -2,7 +2,7 @@
 
 A Windows study app. Upload your lecture notes and Margin writes clean notes, flashcards, practice exams and a day-by-day revision plan from them. An always-on assistant answers your doubts from your own notes. Type a question, or say **"hey Jarvis"** and ask out loud.
 
-It runs on your PC. You can use free local AI models through Ollama, or Claude with your own API key.
+It runs on your PC. You can use free local AI models through Ollama, or Claude or ChatGPT with your own API key.
 
 ## Features
 
@@ -13,7 +13,8 @@ It runs on your PC. You can use free local AI models through Ollama, or Claude w
 - **Practice exams:** multiple-choice and written questions, marked by the AI, with your weak topics tracked.
 - **Papers:** add a subject's past papers and Margin writes new full papers in the same format (sections, marks, time, question style) from your study material, with a marking scheme you can show or hide, and printing.
 - **Exam plan:** enter an exam date and get a daily schedule of learning, review and a mock exam. Weak topics go first. Ticked tasks move to **Done today**.
-- **Assistant:** answers doubts from your notes, with page citations. Hands-free with "hey Jarvis", or press **Talk**.
+- **Assistant:** answers doubts from your notes, with page citations. Hands-free with "hey Jarvis", or press **Talk**. Attach PDFs, Word and PowerPoint files, or pictures, and ask about them.
+- **Chat:** the same assistant as a full page, for longer conversations.
 - **Music:** a Spotify mini player in the sidebar with cover art, progress, previous, play/pause, next and volume. You can also save study playlists.
 - **Tray app:** closing the window keeps Margin listening in the system tray.
 
@@ -21,7 +22,7 @@ It runs on your PC. You can use free local AI models through Ollama, or Claude w
 
 - Windows 10 or 11
 - [Python 3.12](https://www.python.org/downloads/) (tick "Add python.exe to PATH" during install)
-- [Ollama](https://ollama.com/download) for free local AI, or a Claude API key from [console.anthropic.com](https://console.anthropic.com)
+- [Ollama](https://ollama.com/download) for free local AI, or a Claude API key from [console.anthropic.com](https://console.anthropic.com), or an OpenAI API key from [platform.openai.com](https://platform.openai.com)
 - A microphone, for the voice assistant
 - The Spotify desktop app, for the music player (optional)
 - An NVIDIA GPU with 8 GB or more is recommended for local models. They also run on the CPU, just slower.
@@ -112,7 +113,9 @@ The panel on the right is always available.
   | "My Cloud Arch exam is on 28 November, make me a plan" | Builds a revision plan |
   | "Open my flashcards" | Opens that page |
   | "Pause the music", "skip this song", "turn it down", "set the volume to 40" | Controls Spotify |
-- **Search in** limits answers to one subject. **Answer with** switches between the local model and Claude.
+- **Attach files:** click the paperclip, drag files onto the panel, or paste a screenshot. Up to 6 PDFs, Word, PowerPoint, text files or pictures per message. Claude and ChatGPT look at pictures directly; the local model reads their text first.
+- **Chat** in the sidebar opens the assistant as a full page. **New chat** clears the conversation and its attachments.
+- **Search in** limits answers to one subject. **Answer with** switches between the local model, Claude and ChatGPT.
 - Click a page citation like **p. 12** to see the source text, then **Open the document here** to jump to it.
 
 ### 6. Music
@@ -123,21 +126,26 @@ Play something in the Spotify desktop app and it appears at the bottom of the si
 
 | Setting | What it does |
 |---|---|
-| **Thinking** | Claude or Local, for notes, flashcards, exams and answers |
+| **Thinking** | Claude, ChatGPT or Local, for notes, flashcards, exams, papers and answers |
 | **Reading scanned pages** | Claude or Local, for pages with no selectable text. Claude is best for handwriting. |
 | **Graphics card** | **Balanced** (default) uses the GPU only for answers and reads documents on the CPU. **Light** also splits answers with the CPU, which is slower but cooler. **Full** puts everything on the GPU. |
 | **Claude** | Paste your API key. It's stored in Windows Credential Manager, never in a file. Choose Opus 5.5, Sonnet 5.5 or Haiku 5.5. |
+| **ChatGPT** | Paste your OpenAI API key, also stored in Windows Credential Manager. Once the key is saved, the model list shows every model your account can use. |
 | **Voice** | Turn the wake word on or off, adjust its sensitivity, and choose whether answers are spoken |
 
 ### Using Claude
 
 Claude gives noticeably better notes and reads handwriting well. You pay per use through an Anthropic API account; a Claude Pro or Max subscription doesn't cover it. As a rough guide, full notes for a 100-page PDF cost about $0.50 with Opus 5.5, $0.25 with Sonnet 5.5, or under $0.05 with Haiku 5.5. Answering a question costs much less.
 
+### Using ChatGPT
+
+Paste an OpenAI API key in **Settings → ChatGPT**, then pick **ChatGPT** under **Thinking** or in **Answer with**. API use is paid per use through platform.openai.com; a ChatGPT Plus subscription doesn't include it. The mini models cost much less and handle most doubts well.
+
 ## Privacy
 
 - Your documents, notes and history are stored in the `data` folder on your PC.
 - The microphone is analysed on your PC to hear the wake word. Audio is never saved or uploaded.
-- With **Local** selected, nothing leaves your PC. With **Claude** selected, your question and the matching excerpts from your notes go to Anthropic, along with a document's text when you generate notes, flashcards or exams from it.
+- With **Local** selected, nothing leaves your PC. With **Claude** or **ChatGPT** selected, your question, the matching excerpts from your notes and any files you attach go to Anthropic or OpenAI, along with a document's text when you generate notes, flashcards or exams from it.
 - Margin's server only accepts connections from your own PC.
 
 ## Troubleshooting
@@ -149,6 +157,7 @@ Claude gives noticeably better notes and reads handwriting well. You pay per use
 | "The local model … isn't installed" | Run the `ollama pull` commands in Install step 3. |
 | "hey Jarvis" doesn't respond | Check the microphone in Windows sound settings, then lower the sensitivity in Settings → Voice. Or use **Talk**. |
 | "hey Jarvis" triggers by itself | Raise the sensitivity in Settings → Voice. |
+| "OpenAI doesn't offer the model…" | Pick another model in Settings → ChatGPT. |
 | The music player doesn't appear | Open the Spotify desktop app and play something. |
 | A page doesn't update after an update | Press F5 in the Margin window. |
 
@@ -162,7 +171,7 @@ The app is a FastAPI server (`app/server.py`) with a vanilla JavaScript interfac
 | `app/study.py` | Notes, flashcards, exams and plans |
 | `app/papers.py` | Practice papers in the format of past papers |
 | `app/assistant.py` | Answers questions from your notes |
-| `app/llm.py` | One interface over Claude and Ollama |
+| `app/llm.py` | One interface over Claude, ChatGPT and Ollama |
 | `app/voice/engine.py` | Wake word, recording, speech-to-text and speech |
 | `app/music.py` | Spotify links, now playing, controls and volume |
 

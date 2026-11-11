@@ -240,19 +240,30 @@ const VIEWS = {
       <div class="section"><h2>Add an exam</h2>${form}</div>`;
   },
 
+  async chat() {
+    // The assistant panel fills the page here (see route), so the page itself stays empty.
+    return "";
+  },
+
   async settings() {
     const s = await api("/api/state");
     S.state = s;
     const st = s.settings;
     const local = s.ollama.models.filter((m) => !/embed|ocr/.test(m));
     const readers = s.ollama.models.filter((m) => /ocr|vl|vision|llava/.test(m));
-    const seg = (act, value, label) => `<div class="seg" role="group" aria-label="${label}">
+    const seg = (act, value, label, extra = []) => `<div class="seg" role="group" aria-label="${label}">
         <button data-act="${act}" data-v="claude" aria-pressed="${value === "claude"}">Claude</button>
+        ${extra.map(([v, l]) => `<button data-act="${act}" data-v="${v}" aria-pressed="${value === v}">${l}</button>`).join("")}
         <button data-act="${act}" data-v="ollama" aria-pressed="${value === "ollama"}">Local</button></div>`;
+    if (s.openai_configured && !S.openaiModels) {
+      S.openaiModels = [];
+      api("/api/openai/models").then((r) => { S.openaiModels = r.models; if (S.route === "settings" && r.models.length) render(); }).catch(() => {});
+    }
+    const gptModels = [...new Set([st.openai_model, ...(S.openaiModels?.length ? S.openaiModels : s.openai_models)])];
     return `<div class="page-head"><h1>Settings</h1></div>
     <div class="setting"><h2>Thinking</h2>
-      ${seg("provider", st.provider, "Model for notes and answers")}
-      <p class="hint" style="margin:0">Writes your notes, flashcards and exams, and answers your doubts. Claude gives the best results; you pay per use. Local is free and stays on this PC.</p>
+      ${seg("provider", st.provider, "Model for notes and answers", [["openai", "ChatGPT"]])}
+      <p class="hint" style="margin:0">Writes your notes, flashcards and exams, and answers your doubts and chats. Claude and ChatGPT give the best results and can look at pictures you attach; you pay per use. Local is free and stays on this PC.</p>
     </div>
     <div class="setting"><h2>Reading scanned pages</h2>
       ${seg("ocr-provider", st.ocr_provider, "Model for reading scans")}
@@ -273,6 +284,13 @@ const VIEWS = {
       ${s.claude_configured ? `<button type="button" class="ghost danger" data-act="del-key">Remove</button>` : ""}</form>
       <span class="hint">Get a key at console.anthropic.com. It's stored in Windows Credential Manager.</span>
       <label class="field">Model<select data-setting="claude_model">${s.claude_models.map((m) => `<option value="${m.id}" ${m.id === st.claude_model ? "selected" : ""}>${esc(m.label)}</option>`).join("")}</select></label>
+    </div>
+    <div class="setting"><h2>ChatGPT</h2>
+      <form class="row" data-form="openai-key"><input name="key" type="password" autocomplete="off" required placeholder="${s.openai_configured ? "Key saved. Paste a new one to replace it" : "Paste your OpenAI API key"}" aria-label="OpenAI API key" style="flex:1;min-width:240px"><button class="ghost">Save key</button>
+      ${s.openai_configured ? `<button type="button" class="ghost danger" data-act="del-openai-key">Remove</button>` : ""}</form>
+      <span class="hint">Get a key at platform.openai.com and add some credit there. A ChatGPT Plus subscription doesn't include API use. The key is stored in Windows Credential Manager.</span>
+      <label class="field">Model<select data-setting="openai_model">${gptModels.map((m) => `<option ${m === st.openai_model ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>
+        <span class="hint">${S.openaiModels?.length ? "These are the models your key can use." : "Save your key to see every model your account can use."} The mini models are much cheaper and fine for most doubts.</span></label>
     </div>
     <div class="setting"><h2>Local</h2>
       ${s.ollama.running ? `<label class="field">Model<select data-setting="ollama_model">${[...new Set([st.ollama_model, ...local])].map((m) => `<option ${m === st.ollama_model ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>
@@ -466,6 +484,9 @@ function route() {
   const [r, id, page] = (location.hash.slice(1) || "today").split("/");
   S.reader = r === "reader" ? { id: +id, page: page || null } : null;
   S.route = VIEWS[r] && (r !== "reader" || +id) ? r : "today";
+  $(".shell").classList.toggle("chat-full", S.route === "chat");
+  stick();  // the thread changes width with the page, so keep the newest message in view
+  if (S.route === "chat") $("#ask-text").focus();
   $("#drawer").hidden = true;
   view.scrollTop = 0;
   render();
@@ -575,6 +596,11 @@ const ACTIONS = {
   provider: async (d) => { await api("/api/settings", { method: "PUT", json: { provider: d.v } }); },
   "ocr-provider": async (d) => { await api("/api/settings", { method: "PUT", json: { ocr_provider: d.v } }); },
   "del-key": async () => { if (confirm("Remove the saved Claude key?")) await api("/api/settings/claude-key", { method: "DELETE" }); },
+  "del-openai-key": async () => {
+    if (!confirm("Remove the saved OpenAI key?")) return;
+    await api("/api/settings/openai-key", { method: "DELETE" });
+    S.openaiModels = null;
+  },
   "ask-about": (d) => send(`Explain ${d.topic} simply, then give me one exam-style example.`),
 };
 
@@ -619,6 +645,10 @@ document.addEventListener("submit", guard(async (e) => {
   } else if (kind === "key") {
     await api("/api/settings/claude-key", { method: "PUT", json: { key: f.key } });
     toast("Key saved.");
+  } else if (kind === "openai-key") {
+    await api("/api/settings/openai-key", { method: "PUT", json: { key: f.key } });
+    S.openaiModels = null;
+    toast("Key saved. Pick ChatGPT under Thinking to use it.");
   } else if (kind === "exam") {
     await api("/api/exams", { method: "POST", json: {
       course_id: +f.course_id, name: f.name, date: f.date, minutes_per_day: +f.minutes_per_day, topics: f.topics.split("\n"),
@@ -654,8 +684,28 @@ const bubbles = new Map();
 
 function stick() { thread.scrollTop = thread.scrollHeight; }
 
-function addUser(content, via) {
+function addFiles(files) {
+  if (!files?.length) return;
+  const box = document.createElement("div");
+  box.className = "msg-files";
+  files.forEach((f) => {
+    if (f.image) {
+      const img = document.createElement("img");
+      img.src = `/api/attachments/${f.file}`; img.alt = f.name; img.title = f.name;
+      img.onerror = () => img.replaceWith(Object.assign(document.createElement("span"), { className: "chip", textContent: f.name }));
+      box.append(img);
+    } else {
+      const chip = document.createElement("span");
+      chip.className = "chip"; chip.textContent = f.name;
+      box.append(chip);
+    }
+  });
+  thread.append(box);
+}
+
+function addUser(content, via, files) {
   $(".empty-margin")?.remove();
+  addFiles(files);
   const el = document.createElement("div");
   el.className = "msg-user";
   el.textContent = content;
@@ -684,18 +734,80 @@ const loadThread = guard(async () => {
   thread.innerHTML = "";
   bubbles.clear();
   if (!msgs.length) thread.innerHTML = `<p class="empty-margin">say “hey Jarvis” or type a doubt below</p>`;
-  msgs.forEach((m) => m.role === "user" ? addUser(m.content, m.via) : addAi(m.id, m.sources, m.content));
+  msgs.forEach((m) => m.role === "user" ? addUser(m.content, m.via, m.attachments) : addAi(m.id, m.sources, m.content));
 });
 
 const send = guard(async (text) => {
   await api("/api/chat", { method: "POST", json: { text } });
 });
 
-$("#ask").addEventListener("submit", (e) => {
+// Files waiting to go with the next message
+const ATTACHABLE = /\.(pdf|docx|pptx|txt|md|png|jpe?g|webp|gif|bmp)$/i;
+let attached = [];
+function showChips() {
+  const chips = $("#chips");
+  chips.hidden = !attached.length;
+  chips.innerHTML = "";
+  attached.forEach((f, i) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    if (f.type.startsWith("image/")) {
+      const img = document.createElement("img");
+      img.src = URL.createObjectURL(f); img.alt = "";
+      img.onload = () => URL.revokeObjectURL(img.src);
+      chip.append(img);
+    }
+    const name = document.createElement("span");
+    name.textContent = f.name;
+    const x = document.createElement("button");
+    x.type = "button"; x.textContent = "×"; x.setAttribute("aria-label", `Remove ${f.name}`);
+    x.onclick = () => { attached.splice(i, 1); showChips(); };
+    chip.append(name, x);
+    chips.append(chip);
+  });
+}
+function attach(files) {
+  const all = [...files];
+  const ok = all.filter((f) => ATTACHABLE.test(f.name) || f.type.startsWith("image/"));
+  if (ok.length < all.length) toast("Margin can read PDF, Word, PowerPoint, text and picture files.", "error");
+  if (attached.length + ok.length > 6) toast("Up to 6 files per message.");
+  attached = [...attached, ...ok].slice(0, 6);
+  showChips();
+  $("#ask-text").focus();
+}
+$("#attach").onclick = () => $("#attach-file").click();
+$("#attach-file").onchange = (e) => { attach(e.target.files); e.target.value = ""; };
+const askBox = $("#ask");
+const panel = $(".margin");
+["dragover", "dragenter"].forEach((n) => panel.addEventListener(n, (e) => {
+  if (![...e.dataTransfer.types].includes("Files")) return;
+  e.preventDefault(); askBox.classList.add("over");
+}));
+["dragleave", "drop"].forEach((n) => panel.addEventListener(n, (e) => { e.preventDefault(); askBox.classList.remove("over"); }));
+panel.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) attach(e.dataTransfer.files); });
+$("#ask-text").addEventListener("paste", (e) => {
+  const files = [...e.clipboardData.files];
+  if (!files.length) return;
+  e.preventDefault();
+  attach(files.map((f, i) => f.name && f.name !== "image.png" ? f : new File([f], `pasted-${Date.now()}-${i}.png`, { type: f.type })));
+});
+
+$("#ask").addEventListener("submit", guard(async (e) => {
   e.preventDefault();
   const box = $("#ask-text");
   const text = box.value.trim();
-  if (text) { send(text); box.value = ""; }
+  if (!text && !attached.length) return;
+  if (!attached.length) { box.value = ""; await send(text); return; }
+  const form = new FormData();
+  form.append("text", text);
+  attached.forEach((f) => form.append("files", f));
+  const files = attached;
+  box.value = ""; attached = []; showChips();
+  try { await api("/api/chat", { method: "POST", form }); }
+  catch (err) { attached = files; showChips(); box.value = text; throw err; }
+}));
+$("#new-chat").onclick = guard(async () => {
+  if (confirm("Start a new chat? This clears the conversation and its attachments.")) await api("/api/chat", { method: "DELETE" });
 });
 $("#ask-text").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#ask").requestSubmit(); }
@@ -706,9 +818,10 @@ $("#focus").onchange = guard(async (e) => {
 });
 
 $("#brain").onchange = guard(async (e) => {
-  if (e.target.value === "claude" && !S.state.claude_configured) {
-    e.target.value = "ollama";
-    toast("Add your Claude API key here first.");
+  const need = { claude: ["claude_configured", "Claude"], openai: ["openai_configured", "OpenAI"] }[e.target.value];
+  if (need && !S.state[need[0]]) {
+    e.target.value = S.state.settings.provider;
+    toast(`Add your ${need[1]} API key here first.`);
     location.hash = "settings";
     return;
   }
@@ -767,7 +880,7 @@ function onEvent(ev) {
         setTimeout(() => { noteDirty = false; render(); }, 700);
       }
       break;
-    case "chat.user": addUser(ev.content, ev.via); break;
+    case "chat.user": addUser(ev.content, ev.via, ev.attachments); break;
     case "chat.start": addAi(ev.id, ev.sources); break;
     case "chat.delta": {
       const b = bubbles.get(ev.id);

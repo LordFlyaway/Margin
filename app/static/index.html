@@ -12,6 +12,7 @@
   <nav class="rail" aria-label="Sections">
     <div class="brand">Margin</div>
     <a href="#today">Today</a>
+    <a href="#chat">Chat</a>
     <a href="#library">Library</a>
     <a href="#notes">Notes</a>
     <a href="#cards">Flashcards <span class="count" id="due-count" hidden></span></a>
@@ -42,6 +43,7 @@
 
   <aside class="margin" aria-label="Assistant">
     <header class="margin-head">
+      <div class="chat-title"><h1>Chat</h1><button class="ghost small" id="new-chat" type="button">New chat</button></div>
       <div class="status-row">
         <span class="dot" id="voice-dot" data-state="off"></span>
         <span class="hand" id="voice-text">voice is starting</span>
@@ -52,14 +54,21 @@
         <select id="focus"></select>
       </label>
       <label class="focus">Answer with
-        <select id="brain"><option value="ollama">Local model</option><option value="claude">Claude</option></select>
+        <select id="brain"><option value="ollama">Local model</option><option value="claude">Claude</option><option value="openai">ChatGPT</option></select>
       </label>
     </header>
     <div class="thread" id="thread" aria-live="polite"></div>
     <div class="player" id="player" hidden></div>
     <form class="ask" id="ask">
-      <textarea id="ask-text" rows="2" placeholder="Ask a doubt, or tell me what to do" aria-label="Ask a doubt or give an instruction"></textarea>
-      <button class="primary" type="submit">Ask</button>
+      <div class="chips" id="chips" hidden></div>
+      <div class="ask-row">
+        <button class="ghost attach" id="attach" type="button" aria-label="Attach files or pictures" title="Attach files or pictures">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11.5l-8.3 8.3a5.2 5.2 0 0 1-7.4-7.4l8.6-8.6a3.5 3.5 0 0 1 4.9 4.9l-8.6 8.6a1.8 1.8 0 0 1-2.5-2.5l7.9-7.9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <input type="file" id="attach-file" multiple hidden accept=".pdf,.docx,.pptx,.txt,.md,.png,.jpg,.jpeg,.webp,.gif,.bmp">
+        <textarea id="ask-text" rows="2" placeholder="Ask a doubt, attach a file, or tell me what to do" aria-label="Ask a doubt or give an instruction"></textarea>
+        <button class="primary" type="submit">Ask</button>
+      </div>
     </form>
   </aside>
 </div>

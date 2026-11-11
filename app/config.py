@@ -1,4 +1,4 @@
-"""Paths, user settings and the Claude API key."""
+"""Paths, user settings and the cloud API keys."""
 from __future__ import annotations
 
 import json
@@ -15,8 +15,9 @@ MODELS = ROOT / "models"
 HOST, PORT = "127.0.0.1", int(os.environ.get("MARGIN_PORT", 8765))
 
 DEFAULTS = {
-    "provider": "ollama",            # "claude" | "ollama"
+    "provider": "ollama",            # "claude" | "openai" | "ollama"
     "claude_model": "claude-opus-5-5",
+    "openai_model": "gpt-5-mini",
     "ollama_model": "qwen2.5:7b",    # thinking: notes, answers, exams. Fits 8 GB VRAM alongside the reader
     "ollama_embed_model": "nomic-embed-text",
     "gpu_mode": "balanced",          # "light" | "balanced" | "full"
@@ -35,9 +36,13 @@ CLAUDE_MODELS = [
     {"id": "claude-haiku-5-5", "label": "Haiku 5.5 (cheapest, $0.10 / $0.50)"},
 ]
 
+# Suggestions only: any chat model the key can use works, and Settings lists the account's own models.
+OPENAI_MODELS = ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4o"]
+
 _lock = threading.Lock()
 _KEYRING_SERVICE = "margin-study"
-_KEYRING_USER = "anthropic_api_key"
+_KEYRING_USERS = {"claude": "anthropic_api_key", "openai": "openai_api_key"}
+_ENV = {"claude": ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"), "openai": ("OPENAI_API_KEY",)}
 
 
 def ensure_dirs() -> None:
@@ -71,23 +76,40 @@ def save_settings(patch: dict) -> dict:
     return dict(merged)
 
 
-def get_claude_key() -> str | None:
+def get_key(provider: str) -> str | None:
     """Saved key from Windows Credential Manager, if there is one."""
     try:
         import keyring
-        return keyring.get_password(_KEYRING_SERVICE, _KEYRING_USER)
+        return keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERS[provider])
     except Exception:
         return None
 
 
-def set_claude_key(key: str | None) -> None:
+def set_key(provider: str, key: str | None) -> None:
     import keyring
     if key:
-        keyring.set_password(_KEYRING_SERVICE, _KEYRING_USER, key)
-    elif get_claude_key():
-        keyring.delete_password(_KEYRING_SERVICE, _KEYRING_USER)
+        keyring.set_password(_KEYRING_SERVICE, _KEYRING_USERS[provider], key)
+    elif get_key(provider):
+        keyring.delete_password(_KEYRING_SERVICE, _KEYRING_USERS[provider])
+
+
+def configured(provider: str) -> bool:
+    if provider == "ollama":
+        return True
+    return bool(get_key(provider) or any(os.environ.get(v) for v in _ENV[provider]))
+
+
+def get_claude_key() -> str | None:
+    return get_key("claude")
+
+
+def set_claude_key(key: str | None) -> None:
+    set_key("claude", key)
 
 
 def claude_configured() -> bool:
-    return bool(get_claude_key() or os.environ.get("ANTHROPIC_API_KEY")
-                or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+    return configured("claude")
+
+
+def openai_key() -> str | None:
+    return get_key("openai") or os.environ.get("OPENAI_API_KEY")

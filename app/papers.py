@@ -228,7 +228,7 @@ def _progress(paper_id: int, detail: str) -> None:
 
 
 def _write(paper_id: int, course_id: int, subject: str, doc_ids: list[int], doc_titles: list[str]) -> None:
-    claude = llm.provider() == "claude"
+    claude = llm.provider() != "ollama"  # cloud models can be shown the raw past papers
     past, past_titles = _past_text(course_id, 120_000 if claude else 7_000)
 
     if past:
