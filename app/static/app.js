@@ -5,6 +5,7 @@ const view = $("#view");
 const S = {
   state: null, courses: [], route: "today",
   library: { course: null },
+  papers: { course: null, open: null, answers: false },
   notes: { open: null, editing: false },
   cards: { queue: null, i: 0, flipped: false },
   quiz: { open: null, answers: {} },
@@ -68,9 +69,51 @@ const VIEWS = {
     return `
       <div class="page-head"><div><h1>Library</h1><p class="sub">PDFs, slides, Word files, text and photos of handwritten notes.</p></div>${add}</div>
       <div class="tabs"><button data-act="pick-course" data-id="" aria-pressed="${!picked}">All subjects</button>${S.courses.map((c) => `<button data-act="pick-course" data-id="${c.id}" aria-pressed="${c.id === S.library.course}">${esc(c.name)}</button>`).join("")}</div>
-      <div class="drop" id="drop">${dropText} <label>choose files<input id="file" type="file" multiple hidden accept=".pdf,.pptx,.docx,.txt,.md,.png,.jpg,.jpeg,.webp"></label></div>
+      <div class="drop" id="drop" data-course="${picked ? picked.id : ""}">${dropText} <label>choose files<input id="file" type="file" multiple hidden accept=".pdf,.pptx,.docx,.txt,.md,.png,.jpg,.jpeg,.webp"></label></div>
       ${docs.length ? `<ul class="list">${docs.map(docRow).join("")}</ul>` : `<p class="empty">${none}</p>`}
       ${picked ? `<p style="margin-top:30px"><button class="ghost small danger" data-act="del-course" data-id="${picked.id}">Delete this subject</button></p>` : ""}`;
+  },
+
+  async papers() {
+    const P = S.papers;
+    if (P.open) return paperSheet(await api(`/api/papers/${P.open}`));
+    const courses = (await api("/api/courses")).filter((c) => c.name !== "Unsorted");
+    if (!courses.length) return `<div class="page-head"><div><h1>Papers</h1></div></div>
+      <div class="empty"><span class="hand">add a subject first</span>Papers are kept per subject. Add one in the <a href="#library">Library</a>.</div>`;
+    if (!courses.some((c) => c.id === P.course)) P.course = courses[0].id;
+    const course = courses.find((c) => c.id === P.course);
+    const [{ past, made }, docs] = await Promise.all([api(`/api/papers?course_id=${P.course}`), api(`/api/documents?course_id=${P.course}`)]);
+    const ready = docs.filter((d) => d.status === "ready").sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
+    const readyPast = past.filter((p) => p.status === "ready").length;
+    const status = (x) => x.status === "failed" ? `<span class="fail">${esc(x.detail || "Didn't finish.")}</span>`
+      : x.status === "ready" ? "" : esc(x.detail || "Working…");
+    return `<div class="page-head"><div><h1>Papers</h1><p class="sub">Add past papers, then make new ones in the same format from your study material.</p></div></div>
+      <div class="tabs">${courses.map((c) => `<button data-act="papers-course" data-id="${c.id}" aria-pressed="${c.id === P.course}">${esc(c.name)}</button>`).join("")}</div>
+
+      <section class="section"><h2>Make a new paper</h2>
+        ${ready.length ? `<form data-form="paper" class="paper-form">
+          <fieldset><legend>Cover these modules</legend><div class="checks">${ready.map((d) =>
+            `<label class="toggle"><input type="checkbox" name="doc" value="${d.id}" checked> ${esc(d.title)}</label>`).join("")}</div></fieldset>
+          <p class="hint">${readyPast ? `Follows the format of your ${readyPast} past paper${readyPast === 1 ? "" : "s"}: same sections, marks and style, with new questions.`
+            : "No past papers yet, so it uses a standard format: Part A, 10 short questions of 2 marks; Part B, answer any 5 of 7 questions of 10 marks."}</p>
+          <button class="primary">Make paper</button></form>`
+        : `<p class="empty">Upload ${esc(course.name)} study material in the <a href="#library">Library</a> first.</p>`}
+      </section>
+
+      <section class="section"><h2>Your practice papers</h2>
+        ${made.length ? `<ul class="list">${made.map((p) => `<li><div class="grow">
+          ${p.status === "ready" ? `<button class="link-title" data-act="paper-open" data-id="${p.id}">${esc(p.title)}</button>` : `<span class="title">${esc(p.title)}</span>`}
+          <div class="meta">${p.status === "ready" ? `${esc(p.exam_name || "")} · ${p.total_marks} marks` : status(p)}</div></div>
+          <button class="ghost small danger" data-act="paper-del" data-id="${p.id}" aria-label="Delete ${esc(p.title)}">Delete</button></li>`).join("")}</ul>`
+        : `<p class="empty">None yet.</p>`}
+      </section>
+
+      <section class="section"><h2>Past papers</h2>
+        <div class="drop" id="drop" data-course="${P.course}" data-kind="paper">Drop ${esc(course.name)} past papers here (PDFs, scans or photos), or <label>choose files<input id="file" type="file" multiple hidden accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg,.webp"></label></div>
+        ${past.length ? `<ul class="list">${past.map((p) => `<li><div class="grow"><a class="link-title" href="#reader/${p.id}">${esc(p.title)}</a>
+          <div class="meta">${p.status === "ready" ? `${p.page_count} page${p.page_count === 1 ? "" : "s"}` : status(p)}</div></div>
+          <button class="ghost small danger" data-act="del-doc" data-id="${p.id}" aria-label="Delete ${esc(p.title)}">Delete</button></li>`).join("")}</ul>` : ""}
+      </section>`;
   },
 
   async music() {
@@ -309,6 +352,35 @@ setInterval(refreshMini, 3000);
 setInterval(drawMini, 500);
 refreshMini();
 
+function paperSheet(p) {
+  const b = p.body;
+  if (p.status !== "ready") return `<p><button class="ghost small" data-act="paper-back">All papers</button></p><p class="${p.status === "failed" ? "fail" : "typing"}">${esc(p.detail || "writing…")}</p>`;
+  const hours = b.duration_minutes >= 60 ? `${+(b.duration_minutes / 60).toFixed(1)} hour${b.duration_minutes === 60 ? "" : "s"}` : `${b.duration_minutes} minutes`;
+  let n = 0;
+  const sections = b.sections.map((s) => {
+    const all = s.answer >= s.questions.length;
+    const rule = all ? `Answer all · ${s.questions.length} × ${s.marks} = ${s.questions.length * s.marks} marks`
+      : `Answer any ${s.answer} of ${s.questions.length} · ${s.answer} × ${s.marks} = ${s.answer * s.marks} marks`;
+    return `<section class="exam-part"><h2>${esc(s.name)}</h2><p class="exam-rule">${rule}</p>
+      ${s.instructions ? `<p class="exam-instr">${esc(s.instructions)}</p>` : ""}
+      <ol class="exam-qs" start="${n + 1}">${s.questions.map((q) => { n++; return `<li>
+        <div class="exam-q"><div class="prose">${md(q.text)}</div><span class="exam-marks">[${q.marks}]</span></div>
+        ${q.options.length ? `<ol class="exam-opts" type="a">${q.options.map((o) => `<li>${md(o)}</li>`).join("")}</ol>` : ""}
+        <div class="exam-answer"><div class="exam-answer-label">Marking scheme${q.module ? ` · ${esc(q.module)}` : ""}${q.topic ? ` · ${esc(q.topic)}` : ""}</div><div class="prose">${md(q.answer)}</div></div>
+      </li>`; }).join("")}</ol></section>`;
+  }).join("");
+  return `<div class="paper-actions"><button class="ghost small" data-act="paper-back">All papers</button>
+      <div class="row"><label class="toggle"><input type="checkbox" data-act="paper-answers" ${S.papers.answers ? "checked" : ""}> Show answers</label>
+      <button class="ghost" data-act="paper-print">Print</button></div></div>
+    <article class="exam-sheet ${S.papers.answers ? "show-answers" : ""}">
+      <header class="exam-head"><div class="exam-subject">${esc(b.subject)}</div><h1>${esc(b.exam_name)}</h1>
+        <div class="exam-meta"><span>Time: ${hours}</span><span>${esc(p.title)}</span><span>Maximum marks: ${b.total_marks}</span></div></header>
+      ${b.instructions ? `<p class="exam-instr">${esc(b.instructions)}</p>` : ""}
+      ${sections}
+      <footer class="exam-foot">Covers ${esc(b.covers.join(", "))}${b.based_on.length ? ` · format from ${esc(b.based_on.join(", "))}` : " · standard format"}</footer>
+    </article>`;
+}
+
 function docRow(d) {
   const ready = d.status === "ready";
   const sub = d.status === "failed" ? `<span class="fail">${esc(d.detail)}</span>`
@@ -378,7 +450,7 @@ async function render() {
     const top = view.scrollTop;
     view.innerHTML = html;
     view.scrollTop = top;
-    if (S.route === "library") wireDrop();
+    if (S.route === "library" || S.route === "papers") wireDrop();
     if (S.route === "reader" && S.reader.page) document.getElementById(`slide-${S.reader.page}`)?.scrollIntoView();
   } catch (e) { view.innerHTML = `<p class="fail">${esc(e.message)}</p>`; }
   refreshDue();
@@ -402,16 +474,17 @@ function route() {
 function wireDrop() {
   const drop = $("#drop");
   if (!drop) return;
-  $("#file").onchange = (e) => upload(e.target.files);
+  $("#file").onchange = (e) => upload(e.target.files, drop.dataset);
   ["dragover", "dragenter"].forEach((n) => drop.addEventListener(n, (e) => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach((n) => drop.addEventListener(n, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
-  drop.addEventListener("drop", (e) => upload(e.dataTransfer.files));
+  drop.addEventListener("drop", (e) => upload(e.dataTransfer.files, drop.dataset));
 }
 
-const upload = guard(async (files) => {
+const upload = guard(async (files, target = {}) => {
   if (!files.length) return;
   const form = new FormData();
-  if (S.library.course) form.append("course_id", S.library.course);
+  if (target.course) form.append("course_id", target.course);
+  if (target.kind) form.append("kind", target.kind);
   [...files].forEach((f) => form.append("files", f));
   const r = await api("/api/documents", { method: "POST", form });
   if (r.rejected.length) toast(`Can't read: ${r.rejected.join(", ")}`, "error");
@@ -439,6 +512,12 @@ const ACTIONS = {
       <iframe title="Spotify player" src="https://open.spotify.com/embed/${encodeURIComponent(d.kind)}/${encodeURIComponent(d.sid)}?utm_source=generator" height="152" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>`;
   },
   "music-close": () => { const p = $("#player"); p.innerHTML = ""; p.hidden = true; },
+  "papers-course": (d) => { S.papers.course = +d.id; render(); },
+  "paper-open": (d) => { S.papers.open = +d.id; view.scrollTop = 0; render(); },
+  "paper-back": () => { S.papers.open = null; render(); },
+  "paper-del": async (d) => { if (confirm("Delete this practice paper?")) await api(`/api/papers/${d.id}`, { method: "DELETE" }); },
+  "paper-answers": (d, el) => { S.papers.answers = el.checked; $(".exam-sheet")?.classList.toggle("show-answers", el.checked); },
+  "paper-print": () => window.print(),
   "open-external": (d) => api(`/api/documents/${d.id}/open`, { method: "POST" }),
   "rename-doc": async (d) => {
     const title = prompt("New name for this document", d.title);
@@ -530,6 +609,11 @@ document.addEventListener("submit", guard(async (e) => {
   if (kind === "course") {
     const r = await api("/api/courses", { method: "POST", json: { name: f.name } });
     S.library.course = r.id;
+  } else if (kind === "paper") {
+    const ids = [...e.target.querySelectorAll('input[name="doc"]:checked')].map((i) => +i.value);
+    if (!ids.length) { toast("Pick at least one module.", "error"); return; }
+    await api("/api/papers", { method: "POST", json: { course_id: S.papers.course, document_ids: ids } });
+    toast("Writing your paper. It'll appear under Your practice papers.");
   } else if (kind === "music") {
     await api("/api/music", { method: "POST", json: { link: f.link } });
   } else if (kind === "key") {
@@ -660,7 +744,7 @@ $("#mute").onclick = guard(async () => { showVoice(await api("/api/voice/mute", 
 // ---- Live updates -------------------------------------------------------
 
 const DEPENDS = {
-  documents: ["library", "today"], courses: ["library", "plan"], notes: ["notes"], cards: ["cards", "today"],
+  documents: ["library", "today", "papers"], courses: ["library", "plan", "papers"], papers: ["papers"], notes: ["notes"], cards: ["cards", "today"],
   quizzes: ["practice", "today"], exams: ["plan", "today"], settings: ["settings"], chat: [], music: ["music"],
 };
 

@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import assistant, config, db, events, ingest, llm, music, sorting, startup, study
+from . import assistant, config, db, events, ingest, llm, music, papers, sorting, startup, study
 from .voice.engine import engine as voice
 
 STATIC = Path(__file__).parent / "static"
@@ -140,15 +140,19 @@ def del_course(cid: int):
 
 
 @app.get("/api/documents")
-def documents(course_id: int | None = None):
-    sql = """SELECT d.*, c.name AS course FROM documents d JOIN courses c ON c.id=d.course_id"""
+def documents(course_id: int | None = None, kind: str = "notes"):
+    sql = """SELECT d.*, c.name AS course FROM documents d JOIN courses c ON c.id=d.course_id WHERE d.kind=?"""
     if course_id:
-        return db.q(sql + " WHERE d.course_id=? ORDER BY d.id DESC", course_id)
-    return db.q(sql + " ORDER BY d.id DESC")
+        return db.q(sql + " AND d.course_id=? ORDER BY d.id DESC", kind, course_id)
+    return db.q(sql + " ORDER BY d.id DESC", kind)
 
 
 @app.post("/api/documents")
-async def upload(course_id: int | None = Form(None), files: list[UploadFile] = File(...)):
+async def upload(course_id: int | None = Form(None), kind: str = Form("notes"), files: list[UploadFile] = File(...)):
+    if kind not in ("notes", "paper"):
+        raise HTTPException(400, "Unknown document type.")
+    if kind == "paper" and course_id is None:
+        raise HTTPException(400, "Choose the subject these past papers belong to.")
     auto_sort = course_id is None  # no subject chosen: the AI files it
     if auto_sort:
         course_id = sorting.unsorted_id()
@@ -162,12 +166,15 @@ async def upload(course_id: int | None = Form(None), files: list[UploadFile] = F
             continue
         target = config.UPLOADS / f"{uuid.uuid4().hex}{ext}"
         target.write_bytes(await f.read())
-        doc_id = db.run("INSERT INTO documents(course_id,title,filename,path,detail) VALUES(?,?,?,?,?)",
-                        course_id, ingest.clean_title(Path(name).stem), name, str(target), "Waiting to start")
+        stem = Path(name).stem
+        title = ingest.clean_paper_title(stem) if kind == "paper" else ingest.clean_title(stem)
+        doc_id = db.run("INSERT INTO documents(course_id,title,filename,path,detail,kind) VALUES(?,?,?,?,?,?)",
+                        course_id, title, name, str(target), "Waiting to start", kind)
         events.ingest_pool.submit(ingest.process, doc_id, auto_sort)
         made.append(doc_id)
     events.changed("courses")
     events.changed("documents")
+    events.changed("papers")
     return {"ids": made, "rejected": rejected}
 
 
@@ -197,6 +204,7 @@ def del_document(doc_id: int):
     Path(doc["path"]).unlink(missing_ok=True)
     db.run("DELETE FROM documents WHERE id=?", doc_id)
     events.changed("documents")
+    events.changed("papers")
     return {"ok": True}
 
 
@@ -463,6 +471,43 @@ def send(text: str = Body(..., embed=True, min_length=1)):
 def clear_chat():
     db.run("DELETE FROM messages")
     events.changed("chat")
+    return {"ok": True}
+
+
+# ---- Papers -------------------------------------------------------------
+
+@app.get("/api/papers")
+def papers_list(course_id: int):
+    past = db.q("""SELECT id,title,status,detail,page_count FROM documents
+                   WHERE course_id=? AND kind='paper' ORDER BY title""", course_id)
+    made = db.q("SELECT id,title,status,detail,created_at,body FROM papers WHERE course_id=? ORDER BY id DESC", course_id)
+    for p in made:
+        body = json.loads(p.pop("body") or "{}")
+        p["total_marks"], p["exam_name"] = body.get("total_marks"), body.get("exam_name")
+    return {"past": past, "made": made}
+
+
+class PaperIn(BaseModel):
+    course_id: int
+    document_ids: list[int] = []
+
+
+@app.post("/api/papers")
+def papers_make(body: PaperIn):
+    return {"id": papers.start(body.course_id, body.document_ids or None)}
+
+
+@app.get("/api/papers/{pid}")
+def paper(pid: int):
+    row = _need(db.one("SELECT p.*, c.name AS course FROM papers p JOIN courses c ON c.id=p.course_id WHERE p.id=?", pid))
+    row["body"] = json.loads(row["body"] or "{}")
+    return row
+
+
+@app.delete("/api/papers/{pid}")
+def paper_delete(pid: int):
+    db.run("DELETE FROM papers WHERE id=?", pid)
+    events.changed("papers")
     return {"ok": True}
 
 

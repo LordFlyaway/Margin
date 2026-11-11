@@ -82,6 +82,12 @@ CREATE TABLE IF NOT EXISTS music(
   id INTEGER PRIMARY KEY, kind TEXT NOT NULL, spotify_id TEXT NOT NULL, title TEXT NOT NULL,
   thumbnail TEXT, UNIQUE(kind, spotify_id));
 
+CREATE TABLE IF NOT EXISTS papers(
+  id INTEGER PRIMARY KEY,
+  course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'writing', detail TEXT,
+  body TEXT NOT NULL DEFAULT '{}', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL,
   sources TEXT NOT NULL DEFAULT '[]', via TEXT NOT NULL DEFAULT 'text',
@@ -107,9 +113,12 @@ def init() -> None:
     conn().executescript(SCHEMA)
     if "done_at" not in {r["name"] for r in q("PRAGMA table_info(tasks)")}:
         run("ALTER TABLE tasks ADD COLUMN done_at TEXT")
+    if "kind" not in {r["name"] for r in q("PRAGMA table_info(documents)")}:
+        run("ALTER TABLE documents ADD COLUMN kind TEXT NOT NULL DEFAULT 'notes'")  # 'notes' | 'paper'
     # Anything still "in progress" was cut off by the app closing.
     # Documents are excluded: ingest.resume_unfinished picks those back up.
     run("UPDATE notes SET status='failed' WHERE status='writing'")
+    run("UPDATE papers SET status='failed', detail='Margin closed before this finished.' WHERE status='writing'")
     run("UPDATE quizzes SET status='failed' WHERE status='writing'")
     run("UPDATE exams SET status='failed', detail='Margin closed before this finished.' WHERE status='planning'")
 

@@ -393,6 +393,77 @@ def test_ticked_task_moves_to_done_today_and_back(client):
     assert tid in ids("tasks") and tid not in ids("completed")
 
 
+def test_past_papers_stay_out_of_the_library(client, monkeypatch):
+    monkeypatch.setattr(llm, "embed", lambda _t: None)
+    cid = client.post("/api/courses", json={"name": "Paper upload"}).json()["id"]
+    files = [("files", ("CAT1_OS_2024 (1).txt", b"Q1. Define a process. [2]", "text/plain"))]
+    assert client.post("/api/documents", data={"kind": "paper"}, files=files).status_code == 400  # needs a subject
+    pid = client.post("/api/documents", data={"course_id": cid, "kind": "paper"}, files=files).json()["ids"][0]
+    _wait(lambda: db.one("SELECT status FROM documents WHERE id=?", pid)["status"] != "processing")
+    assert db.one("SELECT title,kind FROM documents WHERE id=?", pid) == {"title": "CAT1 OS 2024", "kind": "paper"}
+    assert pid not in [d["id"] for d in client.get(f"/api/documents?course_id={cid}").json()]
+    assert [p["id"] for p in client.get(f"/api/papers?course_id={cid}").json()["past"]] == [pid]
+
+
+def test_paper_format_is_kept_sensible():
+    from app import papers
+    fmt = papers.clean_format({"exam_name": "CAT 1", "duration_minutes": 9999, "instructions": "", "style": "",
+                               "sections": [{"name": "Part A", "instructions": "", "kind": "weird",
+                                             "questions": 5, "answer": 9, "marks": 4}]})
+    assert fmt["duration_minutes"] == 180 and fmt["sections"][0]["answer"] == 5 and fmt["sections"][0]["kind"] == "long"
+    assert papers.total_marks(fmt) == 20
+    assert papers.clean_format({"sections": []}) == papers.DEFAULT_FORMAT
+    fixed = papers.clean_format({"exam_name": "CAT", "duration_minutes": 90, "max_marks": 50, "instructions": "", "style": "",
+                                 "sections": [{"name": "A", "instructions": "", "kind": "long", "questions": 5, "answer": 5, "marks": 5}]})
+    assert fixed["sections"][0]["marks"] == 10 and papers.total_marks(fixed) == 50
+
+
+def test_paper_needs_study_material(client):
+    from app import papers
+    cid = client.post("/api/courses", json={"name": "Empty paper subject"}).json()["id"]
+    with pytest.raises(llm.LLMError):
+        papers.start(cid)
+
+
+def test_paper_follows_past_format_and_covers_material(client, monkeypatch):
+    from app import papers
+    cid, d1 = _ready_doc(client, "Paper OS", ["Paging maps pages to frames.", "The TLB caches translations."])
+    past = db.run("INSERT INTO documents(course_id,title,filename,path,status,kind) VALUES(?,?,?,?,'ready','paper')",
+                  cid, "FAT 2024", "f", "x")
+    db.run("INSERT INTO pages VALUES(?,?,?)", past, 1, "PART A Answer all. 1. Define paging. [3] PART B Answer any 2 of 3.")
+    prompts = []
+
+    def fake(prompt, system, schema, effort="high"):
+        prompts.append(prompt)
+        if schema is papers._FORMAT_SCHEMA:
+            return {"exam_name": "FAT", "duration_minutes": 120, "instructions": "Answer as directed.", "style": "Define/Explain",
+                    "sections": [{"name": "Part A", "instructions": "Answer all.", "kind": "short", "questions": 2, "answer": 2, "marks": 3},
+                                 {"name": "Part B", "instructions": "Answer any 2.", "kind": "long", "questions": 3, "answer": 2, "marks": 10}]}
+        n = int(prompt.split()[1])
+        return {"questions": [{"text": f"Q{len(prompts)}-{i}", "options": [], "topic": "Paging", "module": "Paper OS", "answer": "Key points"}
+                              for i in range(n)]}
+
+    monkeypatch.setattr(llm, "complete_json", fake)
+    pid = papers.start(cid)
+    _wait(lambda: db.one("SELECT status FROM papers WHERE id=?", pid)["status"] != "writing")
+    p = client.get(f"/api/papers/{pid}").json()
+    assert p["status"] == "ready" and p["body"]["based_on"] == ["FAT 2024"] and p["body"]["covers"] == ["Paper OS"]
+    assert [len(s["questions"]) for s in p["body"]["sections"]] == [2, 3]
+    assert p["body"]["total_marks"] == 2 * 3 + 2 * 10 and p["body"]["duration_minutes"] == 120
+    assert "Paging maps pages" in prompts[1] and "Define/Explain" in prompts[1]  # material and the style summary
+    assert "Define paging" not in prompts[1]  # local models get the summary, not the raw past paper to copy from
+
+
+def test_make_paper_command(client, monkeypatch):
+    from app import actions, papers
+    cid, d1 = _ready_doc(client, "Cmd paper OS", ["x"])
+    started = []
+    monkeypatch.setattr(papers, "start", lambda c, ids: started.append((c, ids)) or 1)
+    monkeypatch.setattr(actions, "plan", lambda t: [_action(name="make_paper", subject="Cmd paper OS")])
+    reply = actions.try_handle("make me a practice paper for cmd paper os")
+    assert started == [(cid, [d1])] and "standard exam format" in reply
+
+
 def test_second_launch_asks_for_the_window(client):
     seen = []
     events.listen(seen.append)

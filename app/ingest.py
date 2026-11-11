@@ -145,6 +145,12 @@ def clean_title(stem: str) -> str:
     return re.sub(r"[_]+", " ", title).strip() or stem
 
 
+def clean_paper_title(stem: str) -> str:
+    """Past papers keep their names (they say which exam and year), just tidied."""
+    title = re.sub(r"\s*\(\d+\)$", "", stem)
+    return re.sub(r"[_]+", " ", title).strip() or stem
+
+
 def chunk_text(text: str, size: int = _CHUNK, overlap: int = _OVERLAP) -> list[str]:
     text = re.sub(r"[ \t]+", " ", text).strip()
     chunks, start = [], 0

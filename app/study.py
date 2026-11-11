@@ -290,7 +290,7 @@ def rebuild_exam(exam_id: int) -> None:
 
 
 def _extract_topics(course_id: int) -> list[str]:
-    docs = db.q("SELECT id FROM documents WHERE course_id=? AND status='ready'", course_id)
+    docs = db.q("SELECT id FROM documents WHERE course_id=? AND status='ready' AND kind='notes'", course_id)
     if not docs:
         raise llm.LLMError("Upload this course's notes first, or type the syllabus topics yourself.")
     material = "".join(s + "\n" for d in docs for s in sections(d["id"]))[:llm.section_limit()]

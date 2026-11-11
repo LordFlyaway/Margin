@@ -11,6 +11,7 @@ It runs on your PC. You can use free local AI models through Ollama, or Claude w
 - **Notes:** full notes, a summary or a cheat sheet for any document. Key terms are highlighted and every point links back to its source page.
 - **Flashcards:** generated from your documents and scheduled with spaced repetition, so cards you get wrong come back sooner.
 - **Practice exams:** multiple-choice and written questions, marked by the AI, with your weak topics tracked.
+- **Papers:** add a subject's past papers and Margin writes new full papers in the same format (sections, marks, time, question style) from your study material, with a marking scheme you can show or hide, and printing.
 - **Exam plan:** enter an exam date and get a daily schedule of learning, review and a mock exam. Weak topics go first. Ticked tasks move to **Done today**.
 - **Assistant:** answers doubts from your notes, with page citations. Hands-free with "hey Jarvis", or press **Talk**.
 - **Music:** a Spotify mini player in the sidebar with cover art, progress, previous, play/pause, next and volume. You can also save study playlists.
@@ -83,7 +84,17 @@ Each document has these buttons:
 
 In **Exam plan**, enter the exam name, subject, date and how many minutes a day you can study. Leave the topics empty and the AI works them out from your notes. Your daily tasks appear on **Today**. After a practice exam, **Rebuild around weak topics** reschedules with your weak areas first.
 
-### 4. Ask the assistant
+### 4. Practise with full papers
+
+Open **Papers** and pick a subject.
+
+1. Drop the subject's past papers under **Past papers**. Scans and photos work too.
+2. Under **Make a new paper**, untick any modules the exam won't cover, then click **Make paper**.
+3. Open it from **Your practice papers**. It looks like a real exam sheet. Tick **Show answers** for the marking scheme, or **Print** it to write on paper.
+
+New papers follow the past papers' sections, number of questions, marks, time and wording, but the questions are new and come from your study material. Questions too similar to a past paper are thrown out and rewritten. With no past papers, Margin uses a standard format: Part A, 10 short questions of 2 marks; Part B, answer any 5 of 7 questions of 10 marks. Claude writes noticeably better papers than the local model, which occasionally gets subpart marks wrong.
+
+### 5. Ask the assistant
 
 The panel on the right is always available.
 
@@ -97,13 +108,14 @@ The panel on the right is always available.
   | "Make a cheat sheet for module 3 of OS" | Writes a cheat sheet for that one document |
   | "Make 15 flashcards for Cloud Arch module 6" | Creates flashcards |
   | "Quiz me on Operating Systems module 2" | Writes a practice exam |
+  | "Make a practice paper for Operating Systems" | Writes a full paper in the format of your past papers |
   | "My Cloud Arch exam is on 28 November, make me a plan" | Builds a revision plan |
   | "Open my flashcards" | Opens that page |
   | "Pause the music", "skip this song", "turn it down", "set the volume to 40" | Controls Spotify |
 - **Search in** limits answers to one subject. **Answer with** switches between the local model and Claude.
 - Click a page citation like **p. 12** to see the source text, then **Open the document here** to jump to it.
 
-### 5. Music
+### 6. Music
 
 Play something in the Spotify desktop app and it appears at the bottom of the sidebar, with cover art, progress, controls and a volume slider. The slider sets Spotify's level in the Windows volume mixer. To save playlists, paste Spotify links in **Music**: **Open in Spotify** plays full tracks, and **Play here** keeps a small player beside your notes but may only play 30-second previews. No Spotify login or developer key is needed.
 
@@ -148,6 +160,7 @@ The app is a FastAPI server (`app/server.py`) with a vanilla JavaScript interfac
 |---|---|
 | `app/ingest.py` | Reads files into pages, and pages into search chunks |
 | `app/study.py` | Notes, flashcards, exams and plans |
+| `app/papers.py` | Practice papers in the format of past papers |
 | `app/assistant.py` | Answers questions from your notes |
 | `app/llm.py` | One interface over Claude and Ollama |
 | `app/voice/engine.py` | Wake word, recording, speech-to-text and speech |

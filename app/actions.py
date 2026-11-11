@@ -9,18 +9,19 @@ from __future__ import annotations
 import re
 from datetime import date
 
-from . import db, events, llm, music, sorting, study
+from . import db, events, llm, music, papers, sorting, study
 
 PAGES = {"today": "today", "library": "library", "notes": "notes", "flashcards": "cards", "practice": "practice",
+         "papers": "papers",
          "plan": "plan", "music": "music", "settings": "settings"}
 STYLE_NAMES = {"detailed": "full notes", "summary": "a summary", "cheatsheet": "a cheat sheet"}
 
 _COMMAND = re.compile(
     r"\b(make|create|generate|write|build|prepare|open|go to|take me|show me|play|pause|resume|stop|skip|next|previous|"
     r"prev|volume|louder|quieter|softer|mute|unmute|song|music|track|set|send|change|turn (it |the music )?(up|down)|plan|schedule|quiz|test me|flash ?cards?|"
-    r"practice|notes|summar(y|ise|ize)|cheat ?sheet)\b", re.I)
+    r"practice|notes|papers?|summar(y|ise|ize)|cheat ?sheet)\b", re.I)
 
-_NAMES = ["make_notes", "make_flashcards", "make_practice_exam", "plan_exam", "open_page",
+_NAMES = ["make_notes", "make_flashcards", "make_practice_exam", "make_paper", "plan_exam", "open_page",
           "music_play", "music_pause", "music_next", "music_previous", "music_mute", "music_unmute",
           "set_volume", "volume_up", "volume_down"]
 
@@ -54,8 +55,10 @@ Actions:
 - make_notes: write notes from documents. style is "detailed" (default), "summary" or "cheatsheet".
 - make_flashcards: count is cards per document (0 for the default).
 - make_practice_exam: count is questions per document (0 for the default).
+- make_paper: write a full new exam paper in the format of the subject's past papers, from its study material.
+  documents lists the modules it should cover, or is empty for all of them.
 - plan_exam: build a revision plan. date is the exam date as YYYY-MM-DD.
-- open_page: page is one of today, library, notes, flashcards, practice, plan, music, settings.
+- open_page: page is one of today, library, notes, flashcards, practice, papers, plan, music, settings.
 - music_play, music_pause, music_next, music_previous: control Spotify.
 - music_mute, music_unmute: silence the music or bring it back.
 - set_volume: value is the volume percent. volume_up, volume_down: value is how much (0 for the default).
@@ -74,7 +77,7 @@ def might_be_command(text: str) -> bool:
 def _catalog() -> str:
     lines = []
     for c in db.q("SELECT id,name FROM courses WHERE name<>? ORDER BY name", sorting.UNSORTED):
-        titles = [d["title"] for d in db.q("SELECT title FROM documents WHERE course_id=? ORDER BY title", c["id"])]
+        titles = [d["title"] for d in db.q("SELECT title FROM documents WHERE course_id=? AND kind='notes' ORDER BY title", c["id"])]
         lines.append(f"- {c['name']}: {', '.join(titles) or '(no documents)'}")
     return "\n".join(lines) or "(no subjects yet)"
 
@@ -140,9 +143,9 @@ def _find_documents(action: dict) -> tuple[list[dict], str | None]:
     if action["subject"] and not course:
         names = ", ".join(c["name"] for c in db.q("SELECT name FROM courses WHERE name<>?", sorting.UNSORTED))
         return [], f"I couldn't find a subject called {action['subject']}. Your subjects are {names or 'empty'}."
-    sql, args = "SELECT * FROM documents", []
+    sql, args = "SELECT * FROM documents WHERE kind='notes'", []
     if course:
-        sql, args = sql + " WHERE course_id=?", [course["id"]]
+        sql, args = sql + " AND course_id=?", [course["id"]]
     docs = db.q(sql + " ORDER BY title", *args)
     if action["documents"]:
         wanted = [_norm(t) for t in action["documents"]]
@@ -207,6 +210,21 @@ def _make_practice_exam(a: dict) -> str:
         study.start_quiz(d["id"], count)
     return (f"Writing a {count}-question practice exam for each of {_names(docs)}. They'll be in Practice exams."
             if docs else "There was nothing ready to write an exam from.") + note
+
+
+def _make_paper(a: dict) -> str:
+    docs, problem = _find_documents(a)
+    if problem:
+        return problem
+    docs, note = _split_ready(docs)
+    if not docs:
+        return "There was nothing ready to write a paper from." + note
+    course = db.one("SELECT id,name FROM courses WHERE id=?", docs[0]["course_id"])
+    papers.start(course["id"], [d["id"] for d in docs])
+    past = db.one("SELECT COUNT(*) AS n FROM documents WHERE course_id=? AND kind='paper' AND status='ready'", course["id"])["n"]
+    basis = f"in the format of your {past} past paper{'s' if past != 1 else ''}" if past else "in a standard exam format"
+    return (f"Writing a new {course['name']} practice paper {basis}, covering {_names(docs)}. "
+            "It'll be in Papers when it's done.") + note
 
 
 def _plan_exam(a: dict) -> str:
@@ -277,7 +295,7 @@ def _volume(kind: str):
 
 HANDLERS = {
     "make_notes": _make_notes, "make_flashcards": _make_flashcards, "make_practice_exam": _make_practice_exam,
-    "plan_exam": _plan_exam, "open_page": _open_page,
+    "plan_exam": _plan_exam, "open_page": _open_page, "make_paper": _make_paper,
     "music_play": _music("play", "Playing."), "music_pause": _music("pause", "Paused."),
     "music_next": _music("next", "Skipping to the next song."),
     "music_previous": _music("previous", "Going back a song."),
