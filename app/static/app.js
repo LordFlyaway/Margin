@@ -69,7 +69,7 @@ const VIEWS = {
     return `
       <div class="page-head"><div><h1>Library</h1><p class="sub">PDFs, slides, Word files, text and photos of handwritten notes.</p></div>${add}</div>
       <div class="tabs"><button data-act="pick-course" data-id="" aria-pressed="${!picked}">All subjects</button>${S.courses.map((c) => `<button data-act="pick-course" data-id="${c.id}" aria-pressed="${c.id === S.library.course}">${esc(c.name)}</button>`).join("")}</div>
-      <div class="drop" id="drop" data-course="${picked ? picked.id : ""}">${dropText} <label>choose files<input id="file" type="file" multiple hidden accept=".pdf,.pptx,.docx,.txt,.md,.png,.jpg,.jpeg,.webp"></label></div>
+      <div class="drop" id="drop" data-course="${picked ? picked.id : ""}">${dropText} <label>choose files<input id="file" type="file" multiple hidden accept=".pdf,.pptx,.ppt,.docx,.txt,.md,.png,.jpg,.jpeg,.webp"></label></div>
       ${docs.length ? `<ul class="list">${docs.map(docRow).join("")}</ul>` : `<p class="empty">${none}</p>`}
       ${picked ? `<p style="margin-top:30px"><button class="ghost small danger" data-act="del-course" data-id="${picked.id}">Delete this subject</button></p>` : ""}`;
   },

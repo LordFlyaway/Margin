@@ -6,7 +6,7 @@ It runs on your PC. You can use free local AI models through Ollama, or Claude o
 
 ## Features
 
-- **Library:** upload PDFs, PowerPoint, Word, text and Markdown files, and photos of handwritten notes. Drop files on **All subjects** and the AI sorts them into subjects, or drop them on a subject to file them there. Long file names like `FALLSEM…_Module-4 (1)` are shortened to `Module 4`.
+- **Library:** upload PDFs, PowerPoint, Word, text and Markdown files, and photos of handwritten notes. Drop files on **All subjects** and the AI sorts them into subjects, or drop them on a subject to file them there. Long file names like `FALLSEM…_Module-4 (1)` are shortened to `Module 4`. PowerPoint slides (`.pptx` and old `.ppt`) are turned into PDFs, so they open in the reader looking exactly like the slides. This needs Microsoft PowerPoint installed; without it, `.pptx` files show their text instead.
 - **Reader:** open any document inside Margin, with the assistant beside it.
 - **Notes:** full notes, a summary or a cheat sheet for any document. Key terms are highlighted and every point links back to its source page.
 - **Flashcards:** generated from your documents and scheduled with spaced repetition, so cards you get wrong come back sooner.

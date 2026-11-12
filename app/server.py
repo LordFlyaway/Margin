@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import assistant, config, db, events, ingest, llm, music, papers, sorting, startup, study
+from . import assistant, config, convert, db, events, ingest, llm, music, papers, sorting, startup, study
 from .voice.engine import engine as voice
 
 STATIC = Path(__file__).parent / "static"
@@ -226,8 +226,10 @@ def update_document(doc_id: int, course_id: int | None = Body(None, embed=True),
 
 @app.delete("/api/documents/{doc_id}")
 def del_document(doc_id: int):
-    doc = _need(db.one("SELECT path FROM documents WHERE id=?", doc_id))
+    doc = _need(db.one("SELECT path,source_path FROM documents WHERE id=?", doc_id))
     Path(doc["path"]).unlink(missing_ok=True)
+    if doc["source_path"]:
+        Path(doc["source_path"]).unlink(missing_ok=True)
     db.run("DELETE FROM documents WHERE id=?", doc_id)
     events.changed("documents")
     events.changed("papers")
@@ -259,17 +261,24 @@ def _original_path(doc: dict) -> Path:
 @app.get("/api/documents/{doc_id}/view")
 def view_document(doc_id: int):
     """What the reader needs to show this document in the app."""
-    doc = _need(db.one("SELECT id,title,path FROM documents WHERE id=?", doc_id))
+    doc = _need(db.one("SELECT id,title,path,status FROM documents WHERE id=?", doc_id))
     path = _original_path(doc)
     ext = path.suffix.lower()
-    base = {"id": doc["id"], "title": doc["title"], "external": ext in (".docx", ".pptx", ".pdf")}
+    if ext in convert.SLIDES and doc["status"] != "processing" and convert.available():
+        # Slides uploaded before Margin converted them: make the PDF now, once
+        try:
+            path = ingest.slides_to_pdf(doc_id)
+            ext = ".pdf"
+        except convert.ConvertError:
+            pass  # show the slide text instead
+    base = {"id": doc["id"], "title": doc["title"], "external": ext in (".docx", ".pptx", ".ppt", ".pdf")}
     if ext == ".pdf":
         return {**base, "kind": "pdf"}
     if ext == ".docx":
         import mammoth
         with path.open("rb") as f:
             return {**base, "kind": "word", "html": mammoth.convert_to_html(f).value}
-    if ext == ".pptx":
+    if ext in convert.SLIDES:
         return {**base, "kind": "slides",
                 "pages": db.q("SELECT page,text FROM pages WHERE document_id=? ORDER BY page", doc_id)}
     if ext == ".md":
@@ -480,7 +489,7 @@ def today():
 # ---- Assistant ----------------------------------------------------------
 
 ATTACHMENTS = config.DATA / "attachments"
-_ATTACH_TYPES = ingest.SUPPORTED | {".gif", ".bmp"}
+_ATTACH_TYPES = (ingest.SUPPORTED - {".ppt"}) | {".gif", ".bmp"}  # an old .ppt needs PowerPoint to read
 _ATTACH_MAX = 25 * 1024 * 1024
 _ATTACH_FILES = 6
 

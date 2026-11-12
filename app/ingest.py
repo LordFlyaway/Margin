@@ -8,9 +8,9 @@ from pathlib import Path
 
 import numpy as np
 
-from . import db, events, llm, sorting
+from . import convert, db, events, llm, sorting
 
-SUPPORTED = {".pdf", ".pptx", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".webp"}
+SUPPORTED = {".pdf", ".pptx", ".ppt", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".webp"}
 _IMAGE = {".png", ".jpg", ".jpeg", ".webp"}
 _SCANNED_BELOW = 5  # a PDF page with almost no text gets read as an image. Short title slides are fine as they are
 _CHUNK, _OVERLAP = 900, 150
@@ -169,6 +169,17 @@ def chunk_text(text: str, size: int = _CHUNK, overlap: int = _OVERLAP) -> list[s
     return [c for c in chunks if c]
 
 
+def slides_to_pdf(doc_id: int) -> Path:
+    """Replace a slide deck with a PDF of it; the deck is kept as the source."""
+    doc = db.one("SELECT path,filename FROM documents WHERE id=?", doc_id)
+    source = Path(doc["path"])
+    pdf = convert.to_pdf(source)
+    db.run("UPDATE documents SET path=?, source_path=?, filename=? WHERE id=?",
+           str(pdf), str(source), Path(doc["filename"]).stem + ".pdf", doc_id)
+    events.changed("documents")
+    return pdf
+
+
 def process(doc_id: int, auto_sort: bool = False) -> None:
     doc = db.one("SELECT * FROM documents WHERE id=?", doc_id)
     if not doc:
@@ -184,7 +195,19 @@ def process(doc_id: int, auto_sort: bool = False) -> None:
         def save(page: int, text: str) -> None:
             db.run("INSERT OR REPLACE INTO pages(document_id,page,text) VALUES(?,?,?)", doc_id, page, text)
 
-        pages = extract_pages(Path(doc["path"]), progress, known, save)
+        path = Path(doc["path"])
+        read_from = Path(doc["source_path"]) if doc.get("source_path") else path
+        if path.suffix.lower() in convert.SLIDES:
+            progress("Turning the slides into a PDF")
+            try:
+                pdf = slides_to_pdf(doc_id)
+                # python-pptx reads .pptx text and speaker notes; an old .ppt is read from its PDF
+                read_from = path if path.suffix.lower() == ".pptx" else pdf
+            except convert.ConvertError:
+                if path.suffix.lower() == ".ppt":
+                    raise  # no other way to read an old .ppt
+                # .pptx without PowerPoint: keep the deck, the reader shows its text
+        pages = extract_pages(read_from, progress, known, save)
         if not pages:
             raise llm.LLMError("No readable text was found in this file.")
         db.many("INSERT OR REPLACE INTO pages(document_id,page,text) VALUES(?,?,?)",

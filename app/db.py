@@ -116,6 +116,8 @@ def init() -> None:
         run("ALTER TABLE tasks ADD COLUMN done_at TEXT")
     if "kind" not in {r["name"] for r in q("PRAGMA table_info(documents)")}:
         run("ALTER TABLE documents ADD COLUMN kind TEXT NOT NULL DEFAULT 'notes'")  # 'notes' | 'paper'
+    if "source_path" not in {r["name"] for r in q("PRAGMA table_info(documents)")}:
+        run("ALTER TABLE documents ADD COLUMN source_path TEXT")  # the .pptx a PDF was made from
     if "attachments" not in {r["name"] for r in q("PRAGMA table_info(messages)")}:
         run("ALTER TABLE messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
     # Anything still "in progress" was cut off by the app closing.

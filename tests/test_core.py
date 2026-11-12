@@ -201,6 +201,68 @@ def test_pdf_opens_inline(client, monkeypatch):
     assert r.headers["content-type"] == "application/pdf" and r.headers["content-disposition"].startswith("inline")
 
 
+def _deck(text="Paging splits memory into frames."):
+    import io
+    from pptx import Presentation
+    p = Presentation()
+    slide = p.slides.add_slide(p.slide_layouts[1])
+    slide.shapes.title.text = "Paging"
+    slide.placeholders[1].text = text
+    buf = io.BytesIO()
+    p.save(buf)
+    return buf.getvalue()
+
+
+def _fake_powerpoint(monkeypatch, works=True):
+    import fitz
+    from app import convert
+    made = []
+
+    def to_pdf(source):
+        if not works:
+            raise convert.ConvertError("PowerPoint isn't installed, so slides can't be turned into a PDF.")
+        pdf = fitz.open()
+        pdf.new_page().insert_text((72, 72), "slide one")
+        target = source.with_suffix(".pdf")
+        pdf.save(str(target))
+        made.append(target)
+        return target
+    monkeypatch.setattr(convert, "available", lambda: works)
+    monkeypatch.setattr(convert, "to_pdf", to_pdf)
+    return made
+
+
+def test_slides_become_a_pdf_and_keep_their_text(client, monkeypatch):
+    made = _fake_powerpoint(monkeypatch)
+    doc_id = _uploaded(client, monkeypatch, "Module-5.pptx", _deck())
+    doc = db.one("SELECT * FROM documents WHERE id=?", doc_id)
+    assert doc["status"] == "ready" and doc["path"].endswith(".pdf") and doc["source_path"].endswith(".pptx")
+    assert doc["filename"] == "Module-5.pdf" and len(made) == 1
+    # the text (and so search and citations) still comes from the slides themselves
+    assert "Paging splits memory" in db.one("SELECT text FROM pages WHERE document_id=?", doc_id)["text"]
+    assert client.get(f"/api/documents/{doc_id}/view").json()["kind"] == "pdf"
+    assert client.get(f"/api/documents/{doc_id}/file").headers["content-type"] == "application/pdf"
+    assert len(made) == 1  # opening it again doesn't convert again
+    client.delete(f"/api/documents/{doc_id}")
+    assert not Path(doc["path"]).exists() and not Path(doc["source_path"]).exists()
+
+
+def test_slides_uploaded_earlier_convert_when_opened(client, monkeypatch):
+    _fake_powerpoint(monkeypatch, works=False)
+    doc_id = _uploaded(client, monkeypatch, "old.pptx", _deck())
+    assert client.get(f"/api/documents/{doc_id}/view").json()["kind"] == "slides"  # no PowerPoint: text view
+    made = _fake_powerpoint(monkeypatch)
+    assert client.get(f"/api/documents/{doc_id}/view").json()["kind"] == "pdf"
+    assert len(made) == 1 and db.one("SELECT path FROM documents WHERE id=?", doc_id)["path"].endswith(".pdf")
+
+
+def test_old_ppt_needs_powerpoint(client, monkeypatch):
+    _fake_powerpoint(monkeypatch, works=False)
+    doc_id = _uploaded(client, monkeypatch, "legacy.ppt", b"\xd0\xcf\x11\xe0 not really a deck")
+    doc = db.one("SELECT status,detail FROM documents WHERE id=?", doc_id)
+    assert doc["status"] == "failed" and "PowerPoint" in doc["detail"]
+
+
 def test_open_externally_uses_stored_file(client, monkeypatch):
     import os as _os
     opened = []
